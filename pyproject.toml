@@ -1,0 +1,34 @@
+[build-system]
+requires = ["pybind11>=2.10", "scikit-build-core>=0.5"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "llmengine"
+version = "0.1.0"
+description = "From-scratch C++17 LLM inference engine for Llama 3.2 on Apple Silicon"
+authors = [{ name = "Shivas Kumar", email = "skuma314@asu.edu" }]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "huggingface_hub",
+    "safetensors",
+    "janus",
+    "transformers",
+    "torch",
+    "fastapi",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "openai"]
+
+[tool.scikit-build]
+# This package's primary build path is CMake-driven (cmake --preset perf).
+# scikit-build-core support is documented here for future `pip install .`
+# packaging; the canonical build remains the CMake presets shipped at the
+# repo root.
+cmake.minimum-version = "3.18"
+cmake.build-type = "Release"
+wheel.packages = ["python/llmengine"]

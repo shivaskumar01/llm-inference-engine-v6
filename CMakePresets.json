@@ -1,0 +1,28 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "correctness",
+      "displayName": "Correctness build (FP32 reference, deterministic)",
+      "binaryDir": "${sourceDir}/build/correctness",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "LLMENGINE_MODE": "CORRECTNESS"
+      }
+    },
+    {
+      "name": "perf",
+      "displayName": "Performance build (NEON, fast-math)",
+      "binaryDir": "${sourceDir}/build/perf",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LLMENGINE_MODE": "PERF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "correctness", "configurePreset": "correctness" },
+    { "name": "perf", "configurePreset": "perf" }
+  ]
+}

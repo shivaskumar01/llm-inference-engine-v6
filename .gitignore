@@ -1,0 +1,14 @@
+build/
+data/
+.venv/
+__pycache__/
+*.so
+*.dylib
+*.pyc
+*.pyd
+*.egg-info/
+*.bin
+*.safetensors
+.DS_Store
+.vscode/
+.idea/
