@@ -547,7 +547,12 @@ Engine::generate(const std::vector<std::int32_t>& prompt_ids, int max_new_tokens
         int next = argmax(logits.data(), V);
         if (cfg_.eos_token_ids.count(next)) { finish = "stop"; break; }
         out.push_back(static_cast<std::int32_t>(next));
-        forward_step(next, static_cast<int>(out.size()) - 1, kv, logits.data());
+        // Skip the forward pass after the final token — its logits would
+        // never be sampled. Mirrors generate_streaming + the schedulers'
+        // "advance only if we'll decode again" guard, so generate() no
+        // longer does one wasted forward_step per call.
+        if (static_cast<int>(out.size()) - prompt_len < max_new_tokens)
+            forward_step(next, static_cast<int>(out.size()) - 1, kv, logits.data());
     }
 
     return {std::move(out), finish};
@@ -594,44 +599,44 @@ void Engine::generate_streaming(
         if (total_max64 > model_.max_pos()) { finish("error"); return; }
         const int total_max  = static_cast<int>(total_max64);
 
-    ContiguousKVCache kv(cfg_.num_hidden_layers, total_max,
-                         cfg_.num_key_value_heads, cfg_.head_dim,
-                         kv_dtype_for(storage_));
+        ContiguousKVCache kv(cfg_.num_hidden_layers, total_max,
+                             cfg_.num_key_value_heads, cfg_.head_dim,
+                             kv_dtype_for(storage_));
 
-    std::vector<float> logits(V);
+        std::vector<float> logits(V);
 
-    // Prefill — capture logits on the last prompt token. Cancellation is
-    // checked between forward steps so a long prompt isn't immune to it.
-    for (int i = 0; i < prompt_len; ++i) {
-        if (cancel.is_cancelled()) { finish("cancelled"); return; }
-        const bool is_last = (i + 1 == prompt_len);
-        forward_step(prompt_ids[i], i, kv, is_last ? logits.data() : nullptr);
-    }
-
-    int generated = 0;
-    std::string reason = "length";
-    int pos = prompt_len;
-    while (generated < max_new_tokens) {
-        if (cancel.is_cancelled()) { reason = "cancelled"; break; }
-        int next = argmax(logits.data(), V);
-        if (cfg_.eos_token_ids.count(next)) { reason = "stop"; break; }
-
-        if (on_token) {
-            // Release the lock so a callback that re-enters engine APIs
-            // doesn't deadlock; re-acquire before the next forward_step.
-            lk.unlock();
-            on_token(next);
-            lk.lock();
+        // Prefill — capture logits on the last prompt token. Cancellation is
+        // checked between forward steps so a long prompt isn't immune to it.
+        for (int i = 0; i < prompt_len; ++i) {
+            if (cancel.is_cancelled()) { finish("cancelled"); return; }
+            const bool is_last = (i + 1 == prompt_len);
+            forward_step(prompt_ids[i], i, kv, is_last ? logits.data() : nullptr);
         }
-        ++generated;
 
-        // Advance KV / get logits for the next position. Skip on the last
-        // iteration since we won't sample again.
-        if (generated < max_new_tokens) {
-            forward_step(next, pos, kv, logits.data());
-            ++pos;
+        int generated = 0;
+        std::string reason = "length";
+        int pos = prompt_len;
+        while (generated < max_new_tokens) {
+            if (cancel.is_cancelled()) { reason = "cancelled"; break; }
+            int next = argmax(logits.data(), V);
+            if (cfg_.eos_token_ids.count(next)) { reason = "stop"; break; }
+
+            if (on_token) {
+                // Release the lock so a callback that re-enters engine APIs
+                // doesn't deadlock; re-acquire before the next forward_step.
+                lk.unlock();
+                on_token(next);
+                lk.lock();
+            }
+            ++generated;
+
+            // Advance KV / get logits for the next position. Skip on the last
+            // iteration since we won't sample again.
+            if (generated < max_new_tokens) {
+                forward_step(next, pos, kv, logits.data());
+                ++pos;
+            }
         }
-    }
 
         finish(reason);
     } catch (const std::exception& e) {

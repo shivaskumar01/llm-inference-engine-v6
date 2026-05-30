@@ -393,8 +393,13 @@ void attention_f32(const float* q,
     const int group_size = num_q_heads / num_kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    // Scratch buffer for scores. Bounded by seq_len; reasonable to stack.
-    std::vector<float> scores(static_cast<std::size_t>(seq_len));
+    // Per-thread reused scratch for the score row. attention_f32 runs once
+    // per layer per token during decode; a fresh heap allocation each call
+    // was churn in the hot path. thread_local keeps it race-free — the engine
+    // serializes forward passes, but this kernel is also reachable from the
+    // pybind test harness and from independent Engine instances.
+    thread_local std::vector<float> scores;
+    scores.resize(static_cast<std::size_t>(seq_len));
 
     for (int h = 0; h < num_q_heads; ++h) {
         const int kv_h = h / group_size;
