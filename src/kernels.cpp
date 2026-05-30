@@ -421,15 +421,21 @@ void attention_f32(const float* q,
     const int group_size = num_q_heads / num_kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    // Per-thread reused scratch for the score row. attention_f32 runs once
-    // per layer per token during decode; a fresh heap allocation each call
-    // was churn in the hot path. thread_local keeps it race-free — the engine
-    // serializes forward passes, but this kernel is also reachable from the
-    // pybind test harness and from independent Engine instances.
+    // Heads are independent — each writes a disjoint out[h] slice — so split
+    // them across the thread pool. parallel_for_rows only forks for long
+    // contexts (work = heads*seq_len*head_dim past the threshold); short-context
+    // decode stays serial since attention is cheap there. Each head's softmax +
+    // weighted sum is unchanged, so the result is bit-identical to serial.
+    parallel_for_rows(
+        num_q_heads,
+        static_cast<std::int64_t>(num_q_heads) * seq_len * head_dim,
+        [&](int h_begin, int h_end) {
+    // Per-thread reused scratch for the score row; thread_local so each pool
+    // worker has its own (reused across this thread's heads and across calls).
     thread_local std::vector<float> scores;
     scores.resize(static_cast<std::size_t>(seq_len));
 
-    for (int h = 0; h < num_q_heads; ++h) {
+    for (int h = h_begin; h < h_end; ++h) {
         const int kv_h = h / group_size;
         const float* qh = &q[static_cast<std::size_t>(h) * head_dim];
 
@@ -464,6 +470,7 @@ void attention_f32(const float* q,
             for (int d = 0; d < head_dim; ++d) oh[d] += s * vt[d];
         }
     }
+    });
 }
 
 }  // namespace llmengine::kernels

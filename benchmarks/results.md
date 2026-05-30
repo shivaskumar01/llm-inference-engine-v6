@@ -105,8 +105,16 @@ compute lifts the FLOP ceiling until weight bandwidth (which batched decode
 already cuts B×) becomes the binding constraint. That is exactly the win
 batched decode was built to deliver, now realized.
 
-Not yet threaded: the attention kernel (per-head parallelism is the natural
-next step) and a lower-overhead pool for the overhead-sensitive M=1 path.
+The attention kernel is threaded too (per-head): at seq_len=4096 it drops
+1.87 -> 0.86 ms/call (2.2x), plateauing there because it becomes
+memory-bandwidth-bound (the inner q·k and weighted-sum dots are still scalar).
+End-to-end this is small — at Llama-1B dimensions attention is <1% of prefill
+and ~5–10% of long-context decode FLOPs (the matmuls dominate), so the value is
+removing the last serial hot loop and keeping attention off the critical path
+at very long context, not a headline tok/s jump.
+
+Still open: a NEON / fused attention kernel, and a lower-overhead pool for the
+overhead-sensitive M=1 path.
 
 ## Streaming + cancellation (Phase 8)
 
@@ -145,8 +153,9 @@ results in `on_done("cancelled")` with zero `on_token` calls
   on a single short prompt.
 - **Persistent thread pool + row-parallel matmul** — DONE (`parallel.hpp`).
   Output channels split across a P-core fork-join pool: single-seq decode 4.3x
-  and 8-seq batched 5.4x on 8 threads (see Threading above). Remaining: thread
-  the attention kernel (per-head), and a lower-overhead pool for the M=1 path.
+  and 8-seq batched 5.4x on 8 threads, and the attention head loop is threaded
+  too (2.2x at seq_len=4096); see Threading above. Remaining: a NEON / fused
+  attention kernel, and a lower-overhead pool for the M=1 path.
 
 The structural pieces (paged KV, chunked-prefill admission, streaming +
 cancellation, OpenAI server) are all in place; the open items are

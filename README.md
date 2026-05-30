@@ -5,7 +5,7 @@ Silicon, built bottom-up from the kernel layer through paged attention,
 continuous batching, and an OpenAI-compatible HTTP server.
 
 **Status:** the structural surface of all 8 v6 phases is in place and
-green under test (111 tests across kernels, tiny+real-1B equivalence,
+green under test (112 tests across kernels, tiny+real-1B equivalence,
 paged KV, schedulers, streaming, OpenAI-compatible HTTP) — but the v6
 plan is **not fully shipped**. The "What's *not* there" section below
 enumerates the parts that are still missing or aspirational (W16A16
@@ -56,7 +56,7 @@ continuous-batching scheduler.
 | Paged KV: BlockManager + PagedKVCache + `forward_logits_paged` | `src/paged_kv.cpp`, `src/engine.cpp` |
 | Static + Continuous batch schedulers (PREFILLING / RUNNING state machine, prefill budget, capacity termination) | `src/scheduler.cpp` |
 | True batched decode — running seqs share one `forward_decode_batch` (M=B weight-stationary GEMMs, per-seq attention) | `src/engine.cpp`, `src/scheduler.cpp` |
-| Row-parallel matmul over a P-core fork-join thread pool (`LLMENGINE_NUM_THREADS`) | `src/parallel.cpp`, `src/kernels.cpp` |
+| Row-parallel matmul + per-head attention over a P-core fork-join thread pool (`LLMENGINE_NUM_THREADS`) | `src/parallel.cpp`, `src/kernels.cpp` |
 | FastAPI server (`/v1/completions`, `/v1/chat/completions`, SSE streaming) | `python/llmengine/server.py` |
 | pybind11 bindings | `src/bindings.cpp` |
 
@@ -145,7 +145,7 @@ Current pytest collection (post code-review fixups):
 
 ```
 tests/test_phase0_loader.py          9    config, safetensors, tied-LM alias, malformed-offset/byte-count/shape/transposed rejects
-tests/test_kernels.py               20    every kernel vs torch FP32 (atol=1e-5)
+tests/test_kernels.py               21    every kernel vs torch FP32 + long-context threaded attention
 tests/test_tiny_equality.py          3    tiny full-forward + greedy match HF
 tests/test_real_smoke.py             6    real-1B short-prompt + RoPE at scale + runtime tied-share
 tests/test_kv_cache.py               5    ContiguousKVCache + generate() + multi-EOS
@@ -157,10 +157,10 @@ tests/test_engine_thread_safety.py   6    concurrent generate / streaming + sche
 tests/test_input_validation.py      13    token-ID bounds, prompt+max_new overflow, streaming worker-error, input-order before model load
 tests/test_server.py                15    FastAPI /v1/* + SSE + cancellation + 400/422 mapping + Pydantic schemas + pre-stream validation
                                     ---
-                                    111   total
+                                    112   total
 ```
 
-Correctness build runs all 111. Perf build runs 106 + 5 skips (the five
+Correctness build runs all 112. Perf build runs 107 + 5 skips (the five
 debug-binding tests — four `_debug_weight_ptr` lookups plus the runtime
 tied-share check — skip because `_debug_*_ptr` accessors are gated to
 correctness via `LLMENGINE_DEBUG_BINDINGS`). Both green.
