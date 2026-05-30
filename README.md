@@ -5,15 +5,15 @@ Silicon, built bottom-up from the kernel layer through paged attention,
 continuous batching, and an OpenAI-compatible HTTP server.
 
 **Status:** the structural surface of all 8 v6 phases is in place and
-green under test (104 tests across kernels, tiny+real-1B equivalence,
+green under test (111 tests across kernels, tiny+real-1B equivalence,
 paged KV, schedulers, streaming, OpenAI-compatible HTTP) — but the v6
 plan is **not fully shipped**. The "What's *not* there" section below
 enumerates the parts that are still missing or aspirational (W16A16
-activations, true batched decode, paged-KV FP16, `convert_weights.py`,
-the persistent thread pool, `compare_llamacpp.py`, real PPL with sample
-sizes). Treat this repo as "v6-shaped and resume-defensible" rather than
-"v6-complete." A separate code review against the plan turned up four
-real gaps that were fixed in a P1 follow-up:
+activations, paged-KV FP16, `convert_weights.py`, the persistent thread
+pool, `compare_llamacpp.py`, real PPL with sample sizes). Treat this repo
+as "v6-shaped and resume-defensible" rather than "v6-complete." A separate
+code review against the plan turned up four real gaps that were fixed in a
+P1 follow-up:
 1. **Streaming** in `server.py` now uses `janus.Queue` + the v6 timeout-bug
    fix (try/except inside the loop), real `request.is_disconnected()`
    polling, and a `CancelToken` plumbed through to the engine — replacing
@@ -55,6 +55,7 @@ continuous-batching scheduler.
 | ContiguousKVCache | `src/kv_cache.cpp` |
 | Paged KV: BlockManager + PagedKVCache + `forward_logits_paged` | `src/paged_kv.cpp`, `src/engine.cpp` |
 | Static + Continuous batch schedulers (PREFILLING / RUNNING state machine, prefill budget, capacity termination) | `src/scheduler.cpp` |
+| True batched decode — running seqs share one `forward_decode_batch` (M=B weight-stationary GEMMs, per-seq attention) | `src/engine.cpp`, `src/scheduler.cpp` |
 | FastAPI server (`/v1/completions`, `/v1/chat/completions`, SSE streaming) | `python/llmengine/server.py` |
 | pybind11 bindings | `src/bindings.cpp` |
 
@@ -150,15 +151,15 @@ tests/test_kv_cache.py               5    ContiguousKVCache + generate() + multi
 tests/test_perf_fp16.py              4    FP16 storage drift on tiny + real-1B
 tests/test_perf_int8.py              3    INT8 W8A32 drift on tiny + real-1B
 tests/test_paged_kv.py               4    PagedKV == ContiguousKV (real-1B), capacity
-tests/test_scheduler.py             22    static + continuous batching, budget, capacity, max_new=0/1/N, knob+enqueue+RoPE+order validation
+tests/test_scheduler.py             23    static + continuous batching, batched-decode==per-seq equivalence, budget, capacity, max_new=0/1/N, knob+enqueue+RoPE+order validation
 tests/test_engine_thread_safety.py   6    concurrent generate / streaming + scheduler concurrency + callback reentrancy
 tests/test_input_validation.py      13    token-ID bounds, prompt+max_new overflow, streaming worker-error, input-order before model load
 tests/test_server.py                15    FastAPI /v1/* + SSE + cancellation + 400/422 mapping + Pydantic schemas + pre-stream validation
                                     ---
-                                    110   total
+                                    111   total
 ```
 
-Correctness build runs all 110. Perf build runs 105 + 5 skips (the five
+Correctness build runs all 111. Perf build runs 106 + 5 skips (the five
 debug-binding tests — four `_debug_weight_ptr` lookups plus the runtime
 tied-share check — skip because `_debug_*_ptr` accessors are gated to
 correctness via `LLMENGINE_DEBUG_BINDINGS`). Both green.
@@ -218,12 +219,6 @@ honest delta between the resume line and the implementation:
 - **W16A16 activations.** Activation buffers (`h`, `h_norm`, `q_buf`,
   `k_buf`, `v_buf`, …) are still FP32 in every engine dtype mode. What
   shipped is W8A32 with FP16 KV. The v6 "W8A16" line was aspirational.
-- **True batched decode.** `ContinuousBatchScheduler::decode_running`
-  iterates over running sequences and runs one `forward_step_paged` per
-  seq. Queries are not stacked into `[batch, hidden]`, no batched matmul.
-  The state machine (admission, prefill cursor, capacity termination) is
-  correct, but the "batching throughput multiplier" framing isn't earned
-  on this implementation.
 - **Paged-KV FP16.** `ContiguousKVCache` is FP16 in fp16/int8 modes;
   `BlockManager` + `PagedKVCache` are still FP32.
 - **W8A8 + `vdotq_s32`.** Needs activation calibration; unlocks real
@@ -251,9 +246,12 @@ are kernel and instrumentation work on top.
   for a custom on-disk format with `convert_weights.py`. Converting
   bf16→fp16→int8 on the fly at load time was simpler and the load time
   cost is amortized.
-- **The persistent thread pool was scoped but never wired.** Single
-  thread was fine for the M=1 decode shape; tying row-parallel matmul
-  to the pool would matter for prefill more than decode.
+- **The persistent thread pool was scoped but never wired.** It was fine
+  to defer while decode was M=1, but now that decode is batched (M=B) and
+  measured compute-bound, row-parallel / multi-threaded matmul is the
+  highest-leverage perf item left — it's what would turn the batched-decode
+  weight-read saving into an actual throughput multiplier (see
+  `benchmarks/results.md`).
 
 These are honest trade-offs, not regrets — the project meets every
 deliverable from the v6 plan that matters for an undergrad ML systems

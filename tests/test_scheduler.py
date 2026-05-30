@@ -94,6 +94,36 @@ def test_continuous_batch_matches_single_seq(tiny_setup) -> None:
     assert mgr.free_blocks == mgr.num_blocks
 
 
+def test_batched_decode_ragged_matches_single_seq(tiny_setup) -> None:
+    """Pins the batched-decode path. Several deliberately different-length
+    prompts are admitted together (max_concurrent >= len, generous prefill
+    budget) so they sit in RUNNING simultaneously and decode through one
+    forward_decode_batch call with B>1 each step. Each sequence's token stream
+    must still equal what engine.generate() produces for it alone — i.e. the
+    weight-stationary matmul reorder and the [B,H] activation stacking perturb
+    no sequence's logits, and ragged lengths / per-seq RoPE positions stay
+    correct under batching."""
+    engine, cfg = tiny_setup
+    prompts = [[1], [2, 3, 4], [5, 6, 7, 8, 9, 10, 11], [12, 13]]
+    max_new = 12
+
+    ref = _engine_generate(engine, prompts, max_new)
+
+    mgr = _make_mgr(cfg, num_blocks=64, block_size=4)
+    sched = llmengine.ContinuousBatchScheduler(
+        engine, mgr, max_concurrent=4, max_prefill_tokens_per_step=64)
+    for p in prompts:
+        sched.enqueue(p, max_new)
+    sched.run_until_idle()
+
+    results = sched.results
+    assert len(results) == len(prompts)
+    for i, (r, (ref_ids, ref_finish)) in enumerate(zip(results, ref)):
+        assert r.token_ids == ref_ids, f"seq {i} (len {len(prompts[i])}) diverged under batched decode"
+        assert r.finish_reason == ref_finish, f"seq {i} finish reason"
+    assert mgr.free_blocks == mgr.num_blocks
+
+
 # ----- max_new_tokens=1 must produce exactly one generated token ----------
 
 @pytest.mark.parametrize("max_concurrent,budget", [

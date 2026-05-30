@@ -235,19 +235,40 @@ void ContinuousBatchScheduler::advance_prefilling() {
 void ContinuousBatchScheduler::decode_running() {
     const auto& cfg = engine_.config();
     const int V = cfg.vocab_size;
-    std::vector<float> logits(V);
 
+    // Gather every RUNNING sequence into one batch so the per-layer projection
+    // matmuls run a single time at M = batch size. The weight-stationary
+    // kernels then read each weight matrix once for the whole batch instead of
+    // once per sequence; attention is still done per-seq inside
+    // forward_decode_batch. Output is bit-identical to decoding each seq on
+    // its own (the matmul reorder preserves every per-element dot), so this
+    // stays token-for-token equal to engine.generate().
+    std::vector<std::int32_t>  tokens;
+    std::vector<int>           positions;
+    std::vector<PagedKVCache*> kvs;
+    std::vector<Sequence*>     batch;
     for (auto& s : running_) {
         if (s->state != SeqState::RUNNING) continue;
-        const int pos = static_cast<int>(s->token_ids.size()) - 1;
-        bool ok = engine_.forward_step_paged(
-            s->token_ids[pos], pos, *s->kv, logits.data());
-        if (!ok) {
+        batch.push_back(s.get());
+        tokens.push_back(s->token_ids.back());
+        positions.push_back(static_cast<int>(s->token_ids.size()) - 1);
+        kvs.push_back(s->kv.get());
+    }
+    if (batch.empty()) return;
+
+    const int B = static_cast<int>(batch.size());
+    std::vector<float> logits(static_cast<std::size_t>(B) * V);
+    std::vector<char>  alive;
+    engine_.forward_decode_batch(tokens, positions, kvs, logits.data(), alive);
+
+    for (int i = 0; i < B; ++i) {
+        Sequence* s = batch[i];
+        if (!alive[i]) {
             s->state = SeqState::FINISHED;
             s->finish_reason = "capacity";
             continue;
         }
-        int next = argmax_logits(logits.data(), V);
+        int next = argmax_logits(&logits[static_cast<std::size_t>(i) * V], V);
         if (cfg.eos_token_ids.count(next)) {
             s->state = SeqState::FINISHED;
             s->finish_reason = "stop";

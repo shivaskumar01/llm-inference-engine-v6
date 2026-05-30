@@ -31,33 +31,44 @@ FP16 KV is the v6 §3.1 design; it landed in the post-review fixup
 `dtype=int8`). `PagedKVCache` is still FP32 (covers a smaller surface
 since it's only used by the scheduler path).
 
-## Multi-sequence throughput (Phase 7)
+## Multi-sequence throughput (Phase 7 + true batched decode)
 
-Workload: 4 prompts, varying lengths (5–12 tokens), `max_new=5` each, real
-1B INT8, scalar attention. Reported as aggregate `tok/s` over the whole
-batch.
+`ContinuousBatchScheduler::decode_running` now stacks every RUNNING sequence
+into one `Engine::forward_decode_batch` call: the projection matmuls (q/k/v/o/
+gate/up/down/lm_head) run once at M = batch size against the weight-stationary
+kernels (each weight row read once, reused across the batch), while attention
+stays per-sequence (each seq has its own paged-KV history and RoPE position).
+Aggregate decode `tok/s` over the whole batch, real 1B INT8, scalar attention,
+`max_new=32`, vs the per-sequence static scheduler:
 
 ```
-  static                         elapsed=  3.747s  gen=  20  agg_tok/s=5.34
-  continuous@budget=4            elapsed=  3.739s  gen=  20  agg_tok/s=5.35
-  continuous@budget=16           elapsed=  3.757s  gen=  20  agg_tok/s=5.32
-  continuous@budget=64           elapsed=  3.751s  gen=  20  agg_tok/s=5.33
-  continuous@budget=256          elapsed=  3.786s  gen=  20  agg_tok/s=5.28
+  B=2   static  agg_tok/s=5.77   continuous(batched)  agg_tok/s=9.98   1.73x
+  B=4   static  agg_tok/s=6.93   continuous(batched)  agg_tok/s=9.46   1.36x
+  B=8   static  agg_tok/s=7.38   continuous(batched)  agg_tok/s=9.19   1.25x
 ```
 
-**Honest read:** continuous batching as implemented is a *scheduler state
-machine* (admission, prefill cursor, capacity-aware decode) on top of
-per-sequence `forward_step_paged`. It is **not** a batched-matmul
-throughput multiplier. The decode loop iterates running sequences and
-runs one engine forward each; queries are never stacked into `[batch,
-hidden]`. The headline throughput is therefore the single-seq rate plus
-overlap between admission/prefill and decode. The v6 plan called for true
-batched matmul; that's tracked in the "known gaps" section.
+Generated tokens are identical in both modes — the matmul reorder is a loop
+re-nest that preserves every per-element dot, so batched decode is bit-for-bit
+equal to per-seq `generate()` (asserted by `test_*_matches_single_seq` and
+`test_batched_decode_ragged_matches_single_seq`).
 
-The budget sweep changes the long-prompt admission cadence but doesn't
-move aggregate throughput on a workload of mostly-short prompts. A real
-p99 inter-token-latency measurement requires per-token wall-clock hooks
-inside the scheduler — that wiring is also a known gap.
+**Honest read:** this is a real batched-matmul path now (queries stacked into
+`[B, hidden]`, one GEMM per projection), and a strict win — but a modest one
+(1.25–1.73x), not the 4–8x a memory-bound server would show. Decode at this
+scale is **compute-bound, not weight-bandwidth-bound**: the per-token FMAs
+dominate (the existing single-seq table already notes "the matmul is no longer
+the bottleneck"), and batching reuses weight *reads* without cutting *FLOPs* —
+B sequences still do B× the multiply-accumulates. So continuous holds a ~flat
+~9–10 tok/s single-thread compute ceiling across batch sizes, while the per-seq
+static path only climbs toward it as B grows and its per-call overhead
+amortizes. The win is largest at small B (overhead + weight-read amortization)
+and tapers as compute dominates. Turning this into the classic batching
+multiplier needs the compute parallelized first (row-parallel / multi-threaded
+matmul — see gaps); once decode is bandwidth-bound, the B× weight-read saving
+that batching already provides converts directly into throughput.
+
+A real p99 inter-token-latency measurement requires per-token wall-clock hooks
+inside the scheduler — that wiring is still a known gap.
 
 ## Streaming + cancellation (Phase 8)
 
@@ -78,11 +89,12 @@ results in `on_done("cancelled")` with zero `on_token` calls
   for this implementation; what shipped is W8A32 (and W8A16 only insofar
   as KV is FP16). Closing this requires replumbing every activation
   buffer (`h`, `h_norm`, `q_buf`, etc.) and the kernel signatures.
-- **True batched decode** — `ContinuousBatchScheduler::decode_running`
-  loops over sequences and calls per-sequence forward; queries are not
-  stacked, no batched matmul. The state machine is correct (admission,
-  prefill budget, capacity termination) but the perf claim from batching
-  isn't established.
+- **True batched decode** — DONE. `decode_running` now stacks the running
+  batch into one `forward_decode_batch` (weight-stationary GEMMs at M=B, with
+  per-seq attention) and is bit-for-bit equal to per-seq decode. The
+  throughput win is modest (1.25–1.73x) because decode here is compute-bound,
+  not bandwidth-bound (see the throughput section above); the large multiplier
+  is now gated on the thread-pool item below, not on the batching structure.
 - **Paged-KV FP16** — `BlockManager` + `PagedKVCache` still hold FP32. The
   contiguous KV cache (single-seq engine path) is FP16 in fp16/int8 mode;
   paged is the next move.
@@ -94,7 +106,10 @@ results in `on_done("cancelled")` with zero `on_token` calls
   the v6 plan's accuracy gate. Drift tests today only assert top-1 / top-5
   on a single short prompt.
 - **Persistent thread pool + row-parallel matmul** — designed in v6 §4.2,
-  never wired.
+  never wired. Now the key perf lever: parallelizing the per-token FMAs is
+  what moves decode from compute-bound to bandwidth-bound, at which point the
+  B× weight-read saving that batched decode already provides converts into
+  real aggregate throughput.
 
 The structural pieces (paged KV, chunked-prefill admission, streaming +
 cancellation, OpenAI server) are all in place; the open items are

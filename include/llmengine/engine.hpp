@@ -117,6 +117,21 @@ public:
                                           PagedKVCache& kv,
                                           float* logits_out);
 
+    // Batched single decode step over B sequences — the continuous-batching
+    // hot path. tokens[i]/positions[i] advance kvs[i] by one token; logits for
+    // seq i land in row i of logits_out (row-major [B, vocab_size]). alive[i]
+    // is set to 0 iff seq i's KV pool was exhausted this step (its logits row
+    // is then undefined; the caller terminates that seq with "capacity"). The
+    // projection matmuls run once at M=B — the weight-stationary kernels reuse
+    // each weight row across the batch — while attention stays per-seq since
+    // each sequence has its own paged KV history and RoPE position.
+    // Thread-safe: serializes on forward_mu_.
+    void forward_decode_batch(const std::vector<std::int32_t>& tokens,
+                              const std::vector<int>& positions,
+                              const std::vector<PagedKVCache*>& kvs,
+                              float* logits_out,
+                              std::vector<char>& alive);
+
 private:
     void forward_step(int token_id, int pos,
                       ContiguousKVCache& kv,
@@ -129,6 +144,7 @@ private:
                                                   float* logits_out);
 
     void ensure_paged_scratch(int max_seq_len);
+    void ensure_batch_scratch(int batch_size);
 
     ModelConfig     cfg_;
     WeightMap       weights_;
@@ -147,6 +163,14 @@ private:
 
     // Paged-attention gather scratch (per-call sized).
     std::vector<float> k_gather_, v_gather_;
+
+    // Batched-decode scratch ([batch_size, dim] row-major), grown on demand
+    // by ensure_batch_scratch. Used only by forward_decode_batch; the M=1
+    // forward_step path keeps its own single-row scratch above.
+    std::vector<float> hb_, hb_norm_;
+    std::vector<float> qb_, kb_, vb_;
+    std::vector<float> attn_b_, ob_;
+    std::vector<float> gateb_, upb_, ffnb_;
 
     void ensure_scratch_loaded();
 };

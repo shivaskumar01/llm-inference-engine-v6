@@ -36,11 +36,15 @@ void matmul_f32(const float* a,
                 int          K,
                 float*       out) {
     // out[m, n] = sum_k a[m, k] * w[n, k]; W stored row-major as [N, K].
-    for (int m = 0; m < M; ++m) {
-        for (int n = 0; n < N; ++n) {
-            float acc = 0.0f;
-            const float* w_row = &w[static_cast<std::size_t>(n) * K];
+    // Weight-stationary order (n outer, m inner): each weight row is read once
+    // and reused across all M activation rows, so a batched decode step
+    // (M = #running seqs) reads the weights ~M x fewer times. The per-element
+    // dot is unchanged, so out[m,n] is bit-identical to the m-outer order.
+    for (int n = 0; n < N; ++n) {
+        const float* w_row = &w[static_cast<std::size_t>(n) * K];
+        for (int m = 0; m < M; ++m) {
             const float* a_row = &a[static_cast<std::size_t>(m) * K];
+            float acc = 0.0f;
             for (int k = 0; k < K; ++k) acc += a_row[k] * w_row[k];
             out[static_cast<std::size_t>(m) * N + n] = acc;
         }
@@ -62,10 +66,10 @@ void matmul_f16w_f32a(const float*  a,
                       int           N,
                       int           K,
                       float*        out) {
-    for (int m = 0; m < M; ++m) {
-        const float* a_row = &a[static_cast<std::size_t>(m) * K];
-        for (int n = 0; n < N; ++n) {
-            const __fp16* w_row = &w[static_cast<std::size_t>(n) * K];
+    for (int n = 0; n < N; ++n) {
+        const __fp16* w_row = &w[static_cast<std::size_t>(n) * K];
+        for (int m = 0; m < M; ++m) {
+            const float* a_row = &a[static_cast<std::size_t>(m) * K];
             float acc = 0.0f;
             for (int k = 0; k < K; ++k)
                 acc += a_row[k] * static_cast<float>(w_row[k]);
@@ -81,14 +85,15 @@ void matmul_int8w_f32a(const float*       a,
                        int                N,
                        int                K,
                        float*             out) {
-    for (int m = 0; m < M; ++m) {
-        const float* a_row = &a[static_cast<std::size_t>(m) * K];
-        for (int n = 0; n < N; ++n) {
-            const std::int8_t* w_row = &w[static_cast<std::size_t>(n) * K];
+    for (int n = 0; n < N; ++n) {
+        const std::int8_t* w_row = &w[static_cast<std::size_t>(n) * K];
+        const float scale_n = static_cast<float>(scales[n]);
+        for (int m = 0; m < M; ++m) {
+            const float* a_row = &a[static_cast<std::size_t>(m) * K];
             float acc = 0.0f;
             for (int k = 0; k < K; ++k)
                 acc += a_row[k] * static_cast<float>(w_row[k]);
-            out[static_cast<std::size_t>(m) * N + n] = acc * static_cast<float>(scales[n]);
+            out[static_cast<std::size_t>(m) * N + n] = acc * scale_n;
         }
     }
 }
@@ -230,11 +235,12 @@ void matmul_f32_neon(const float* a,
                      int          K,
                      float*       out) {
     // out[m, n] = sum_k a[m, k] * w[n, k]; W row-major [N, K].
-    // Inner loop is a NEON-accelerated dot over K. Outer loops are scalar.
-    for (int m = 0; m < M; ++m) {
-        const float* a_row = &a[static_cast<std::size_t>(m) * K];
-        for (int n = 0; n < N; ++n) {
-            const float* w_row = &w[static_cast<std::size_t>(n) * K];
+    // Inner loop is a NEON-accelerated dot over K. Weight-stationary order
+    // (n outer, m inner) reuses each w_row across the M activation rows.
+    for (int n = 0; n < N; ++n) {
+        const float* w_row = &w[static_cast<std::size_t>(n) * K];
+        for (int m = 0; m < M; ++m) {
+            const float* a_row = &a[static_cast<std::size_t>(m) * K];
             out[static_cast<std::size_t>(m) * N + n] =
                 neon_dot_f32(a_row, w_row, K);
         }
@@ -247,10 +253,12 @@ void matmul_f16w_f32a_neon(const float*  a,
                            int           N,
                            int           K,
                            float*        out) {
-    for (int m = 0; m < M; ++m) {
-        const float* a_row = &a[static_cast<std::size_t>(m) * K];
-        for (int n = 0; n < N; ++n) {
-            const __fp16* w_row = &w[static_cast<std::size_t>(n) * K];
+    // Weight-stationary order (n outer, m inner): widen each w_row once and
+    // reuse it across the M activation rows.
+    for (int n = 0; n < N; ++n) {
+        const __fp16* w_row = &w[static_cast<std::size_t>(n) * K];
+        for (int m = 0; m < M; ++m) {
+            const float* a_row = &a[static_cast<std::size_t>(m) * K];
 
             float32x4_t acc0 = vdupq_n_f32(0.0f);
             float32x4_t acc1 = vdupq_n_f32(0.0f);
@@ -299,10 +307,12 @@ void matmul_int8w_f32a_neon(const float*       a,
                             int                N,
                             int                K,
                             float*             out) {
-    for (int m = 0; m < M; ++m) {
-        const float* a_row = &a[static_cast<std::size_t>(m) * K];
-        for (int n = 0; n < N; ++n) {
-            const std::int8_t* w_row = &w[static_cast<std::size_t>(n) * K];
+    // Weight-stationary order (n outer, m inner): load each int8 w_row once
+    // and reuse it across the M activation rows.
+    for (int n = 0; n < N; ++n) {
+        const std::int8_t* w_row = &w[static_cast<std::size_t>(n) * K];
+        for (int m = 0; m < M; ++m) {
+            const float* a_row = &a[static_cast<std::size_t>(m) * K];
 
             float32x4_t acc0 = vdupq_n_f32(0.0f);
             float32x4_t acc1 = vdupq_n_f32(0.0f);
