@@ -96,16 +96,27 @@ if(LLMENGINE_MODE STREQUAL "CORRECTNESS")
   set_target_properties(_llmengine PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python/llmengine
   )
-  configure_file(
-    ${CMAKE_SOURCE_DIR}/python/llmengine/__init__.py
-    ${CMAKE_BINARY_DIR}/python/llmengine/__init__.py
-    COPYONLY
-  )
-  configure_file(
-    ${CMAKE_SOURCE_DIR}/python/llmengine/server.py
-    ${CMAKE_BINARY_DIR}/python/llmengine/server.py
-    COPYONLY
-  )
+  # Mirror the Python package into the correctness build tree so its
+  # _llmengine.so loads as part of a real `llmengine` package. Use
+  # add_custom_command (not configure_file) so edits to __init__.py /
+  # server.py propagate on every `cmake --build` rather than requiring a
+  # re-configure — previously stale copies caused server tests to fail in
+  # correctness while passing in perf.
+  set(LLMENGINE_PY_FILES __init__.py server.py)
+  set(LLMENGINE_PY_OUTPUTS "")
+  foreach(f ${LLMENGINE_PY_FILES})
+    add_custom_command(
+      OUTPUT  ${CMAKE_BINARY_DIR}/python/llmengine/${f}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${CMAKE_SOURCE_DIR}/python/llmengine/${f}
+              ${CMAKE_BINARY_DIR}/python/llmengine/${f}
+      DEPENDS ${CMAKE_SOURCE_DIR}/python/llmengine/${f}
+      COMMENT "Mirroring python/llmengine/${f} into correctness build tree"
+    )
+    list(APPEND LLMENGINE_PY_OUTPUTS ${CMAKE_BINARY_DIR}/python/llmengine/${f})
+  endforeach()
+  add_custom_target(llmengine_py ALL DEPENDS ${LLMENGINE_PY_OUTPUTS})
+  add_dependencies(_llmengine llmengine_py)
 else()
   set_target_properties(_llmengine PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/python/llmengine

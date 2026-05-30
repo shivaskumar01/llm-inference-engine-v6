@@ -502,26 +502,31 @@ std::vector<float> Engine::forward_logits(const std::vector<std::int32_t>& ids) 
 
 std::pair<std::vector<std::int32_t>, std::string>
 Engine::generate(const std::vector<std::int32_t>& prompt_ids, int max_new_tokens) {
+    // All cheap input validation happens BEFORE ensure_model_loaded so a
+    // bad request on an incomplete checkpoint reports an input error
+    // (ValueError / RuntimeError on the Python side) rather than the
+    // weight-loader's "missing weight" message.
+    if (prompt_ids.empty())
+        throw std::invalid_argument("generate: prompt_ids is empty");
+    if (max_new_tokens < 0)
+        throw std::invalid_argument("generate: max_new_tokens negative");
     validate_token_ids(prompt_ids, cfg_.vocab_size, "generate");
+    const int prompt_len = static_cast<int>(prompt_ids.size());
+    // int64 sum so max_new_tokens near INT_MAX can't wrap to a negative
+    // total that slips past the RoPE check and then trips
+    // ContiguousKVCache: non-positive dim. Uses compute_max_pos(cfg_) so
+    // the check doesn't need a materialized model either.
+    const std::int64_t total_max64 =
+        static_cast<std::int64_t>(prompt_len) + max_new_tokens;
+    if (total_max64 > max_pos())
+        throw std::runtime_error("generate: prompt + max_new_tokens exceeds RoPE max_pos");
+
     std::lock_guard<std::mutex> lk(forward_mu_);
 
     ensure_model_loaded();
     ensure_scratch_loaded();
 
-    if (prompt_ids.empty())
-        throw std::invalid_argument("generate: prompt_ids is empty");
-    if (max_new_tokens < 0)
-        throw std::invalid_argument("generate: max_new_tokens negative");
-
     const int V = cfg_.vocab_size;
-    const int prompt_len = static_cast<int>(prompt_ids.size());
-    // int64 sum so max_new_tokens near INT_MAX can't wrap to a negative
-    // total that slips past the RoPE check and then trips
-    // ContiguousKVCache: non-positive dim.
-    const std::int64_t total_max64 =
-        static_cast<std::int64_t>(prompt_len) + max_new_tokens;
-    if (total_max64 > model_.max_pos())
-        throw std::runtime_error("generate: prompt + max_new_tokens exceeds RoPE max_pos");
     const int total_max  = static_cast<int>(total_max64);
 
     ContiguousKVCache kv(cfg_.num_hidden_layers, total_max,

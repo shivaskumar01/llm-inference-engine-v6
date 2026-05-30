@@ -75,7 +75,7 @@ cmake --preset correctness && cmake --build build/correctness -j8
 cmake --preset perf        && cmake --build build/perf        -j8
 
 python tools/download_weights.py --mirror unsloth      # ~2.4 GB
-pytest tests/                                          # 104 tests
+pytest tests/                                          # 110 tests
 ```
 
 The compiled `.so` for the perf build lands in `python/llmengine/` and is
@@ -142,7 +142,7 @@ print(r.choices[0].message.content)"
 Current pytest collection (post code-review fixups):
 
 ```
-tests/test_phase0_loader.py          8    config, safetensors, tied-LM alias, malformed-offset/byte-count/shape rejects
+tests/test_phase0_loader.py          9    config, safetensors, tied-LM alias, malformed-offset/byte-count/shape/transposed rejects
 tests/test_kernels.py               20    every kernel vs torch FP32 (atol=1e-5)
 tests/test_tiny_equality.py          3    tiny full-forward + greedy match HF
 tests/test_real_smoke.py             6    real-1B short-prompt + RoPE at scale + runtime tied-share
@@ -152,13 +152,13 @@ tests/test_perf_int8.py              3    INT8 W8A32 drift on tiny + real-1B
 tests/test_paged_kv.py               4    PagedKV == ContiguousKV (real-1B), capacity
 tests/test_scheduler.py             22    static + continuous batching, budget, capacity, max_new=0/1/N, knob+enqueue+RoPE+order validation
 tests/test_engine_thread_safety.py   6    concurrent generate / streaming + scheduler concurrency + callback reentrancy
-tests/test_input_validation.py      12    token-ID bounds, prompt+max_new overflow, streaming worker-error
-tests/test_server.py                11    FastAPI /v1/* + SSE + cancellation + 400/422 error mapping
+tests/test_input_validation.py      13    token-ID bounds, prompt+max_new overflow, streaming worker-error, input-order before model load
+tests/test_server.py                15    FastAPI /v1/* + SSE + cancellation + 400/422 mapping + Pydantic schemas + pre-stream validation
                                     ---
-                                    104   total
+                                    110   total
 ```
 
-Correctness build runs all 104. Perf build runs 99 + 5 skips (the five
+Correctness build runs all 110. Perf build runs 105 + 5 skips (the five
 debug-binding tests — four `_debug_weight_ptr` lookups plus the runtime
 tied-share check — skip because `_debug_*_ptr` accessors are gated to
 correctness via `LLMENGINE_DEBUG_BINDINGS`). Both green.
@@ -273,7 +273,7 @@ HTTP serving surface.
 ├── include/llmengine/   # public C++ headers
 ├── src/                 # C++ implementation
 ├── python/llmengine/    # pip-installable Python package + FastAPI server
-├── tests/               # 104 pytest tests across all phases
+├── tests/               # 110 pytest tests across all phases
 ├── benchmarks/          # bench_e2e.py + dated results table
 ├── tools/               # download_weights.py
 ├── third_party/         # nlohmann/json single header

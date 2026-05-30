@@ -110,14 +110,45 @@ const Tensor& must_get(const WeightMap& wm, const std::string& name) {
     return wm.at(name);
 }
 
+// Enforce the exact tensor shape, not just the element count. cast_to_fp32 /
+// cast_to_fp16 / quantize_int8_per_row all copy `numel(shape) * dtype_bytes`
+// — a transposed weight (same numel, swapped dims) silently passes them
+// otherwise.
+std::string fmt_shape(const std::vector<std::int64_t>& s) {
+    std::string r = "[";
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (i) r += ",";
+        r += std::to_string(s[i]);
+    }
+    return r + "]";
+}
+
+void require_shape(const Tensor& t,
+                   const std::string& name,
+                   const std::vector<std::int64_t>& expected) {
+    if (t.shape != expected)
+        throw std::runtime_error(
+            "shape mismatch for " + name
+            + ": expected " + fmt_shape(expected)
+            + ", got " + fmt_shape(t.shape));
+}
+
+const Tensor& must_get_shaped(const WeightMap& wm,
+                              const std::string& name,
+                              const std::vector<std::int64_t>& expected) {
+    const Tensor& t = must_get(wm, name);
+    require_shape(t, name, expected);
+    return t;
+}
+
 void load_into_fp32(const WeightMap& wm,
                     const std::string& name,
                     std::vector<float>& dst,
-                    std::size_t expected_n) {
-    const auto& t = must_get(wm, name);
-    if (t.numel() != expected_n)
-        throw std::runtime_error("size mismatch for " + name);
-    dst.resize(expected_n);
+                    const std::vector<std::int64_t>& expected_shape) {
+    const auto& t = must_get_shaped(wm, name, expected_shape);
+    std::size_t n = 1;
+    for (auto d : expected_shape) n *= static_cast<std::size_t>(d);
+    dst.resize(n);
     cast_to_fp32(t, dst.data());
 }
 
@@ -139,9 +170,14 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
     // the same helper so its enqueue-time guard can't drift.
     max_pos_  = compute_max_pos(cfg);
 
+    const std::vector<std::int64_t> shape_vocab_hidden = {
+        static_cast<std::int64_t>(vocab), static_cast<std::int64_t>(hidden)};
+    const std::vector<std::int64_t> shape_hidden = {
+        static_cast<std::int64_t>(hidden)};
+
     // Embeddings + final norm + RoPE — always FP32, regardless of storage mode.
-    load_into_fp32(wm, "model.embed_tokens.weight", embed_tokens_, vocab * hidden);
-    load_into_fp32(wm, "model.norm.weight",         final_norm_,  hidden);
+    load_into_fp32(wm, "model.embed_tokens.weight", embed_tokens_, shape_vocab_hidden);
+    load_into_fp32(wm, "model.norm.weight",         final_norm_,   shape_hidden);
 
     // LM head. Tied to embed at the WeightMap level; we materialize a copy
     // here (so the linear-storage path is uniform).
@@ -154,7 +190,7 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
             lm_head_f32_ptr_ = embed_tokens_.data();
         } else {
             load_into_fp32(wm, "lm_head.weight", lm_head_f32_storage_,
-                           vocab * hidden);
+                           shape_vocab_hidden);
             lm_head_f32_ptr_ = lm_head_f32_storage_.data();
         }
     } else if (storage_ == LinearStorage::F16) {
@@ -163,7 +199,8 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
             for (std::size_t i = 0; i < lm_head_f16_.size(); ++i)
                 lm_head_f16_[i] = static_cast<__fp16>(embed_tokens_[i]);
         } else {
-            cast_to_fp16(must_get(wm, "lm_head.weight"), lm_head_f16_.data());
+            cast_to_fp16(must_get_shaped(wm, "lm_head.weight", shape_vocab_hidden),
+                         lm_head_f16_.data());
         }
     } else {
         // I8: quantize lm_head per-output-row.
@@ -173,14 +210,15 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
             // Build a Tensor view over embed_tokens_ to feed quantizer.
             Tensor t;
             t.dtype = DType::F32;
-            t.shape = {static_cast<std::int64_t>(vocab),
-                       static_cast<std::int64_t>(hidden)};
+            t.shape = shape_vocab_hidden;
             t.data  = embed_tokens_.data();
             t.nbytes = embed_tokens_.size() * sizeof(float);
             quantize_int8_per_row(t, vocab, hidden,
                                   lm_head_i8_.data(), lm_head_i8_scales_.data());
         } else {
-            quantize_int8_per_row(must_get(wm, "lm_head.weight"), vocab, hidden,
+            const auto& t = must_get_shaped(
+                wm, "lm_head.weight", shape_vocab_hidden);
+            quantize_int8_per_row(t, vocab, hidden,
                                   lm_head_i8_.data(), lm_head_i8_scales_.data());
         }
     }
@@ -216,8 +254,17 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
         // per-layer norm blob.
         std::vector<float>& nb = norm_blobs_[l];
         nb.resize(2 * hidden);
-        cast_to_fp32(must_get(wm, base + "input_layernorm.weight"),          &nb[0]);
-        cast_to_fp32(must_get(wm, base + "post_attention_layernorm.weight"), &nb[hidden]);
+        // Per-layer expected shapes (linear weights are stored as [N=out, K=in]).
+        const std::vector<std::int64_t> shp_h     = shape_hidden;
+        const std::vector<std::int64_t> shp_q     = {(std::int64_t)n_q_dim,      (std::int64_t)hidden};
+        const std::vector<std::int64_t> shp_kv    = {(std::int64_t)n_kv_dim,     (std::int64_t)hidden};
+        const std::vector<std::int64_t> shp_o     = {(std::int64_t)hidden,       (std::int64_t)n_q_dim};
+        const std::vector<std::int64_t> shp_gate  = {(std::int64_t)intermediate, (std::int64_t)hidden};
+        const std::vector<std::int64_t> shp_up    = {(std::int64_t)intermediate, (std::int64_t)hidden};
+        const std::vector<std::int64_t> shp_down  = {(std::int64_t)hidden,       (std::int64_t)intermediate};
+
+        cast_to_fp32(must_get_shaped(wm, base + "input_layernorm.weight",          shp_h), &nb[0]);
+        cast_to_fp32(must_get_shaped(wm, base + "post_attention_layernorm.weight", shp_h), &nb[hidden]);
 
         if (storage_ == LinearStorage::F32) {
             std::vector<float>& blob = layer_blobs_f32_[l];
@@ -231,13 +278,13 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
             const std::size_t off_down = off; off += sz_down;
             blob.resize(off);
 
-            cast_to_fp32(must_get(wm, base + "self_attn.q_proj.weight"), &blob[off_q]);
-            cast_to_fp32(must_get(wm, base + "self_attn.k_proj.weight"), &blob[off_k]);
-            cast_to_fp32(must_get(wm, base + "self_attn.v_proj.weight"), &blob[off_v]);
-            cast_to_fp32(must_get(wm, base + "self_attn.o_proj.weight"), &blob[off_o]);
-            cast_to_fp32(must_get(wm, base + "mlp.gate_proj.weight"),    &blob[off_gate]);
-            cast_to_fp32(must_get(wm, base + "mlp.up_proj.weight"),      &blob[off_up]);
-            cast_to_fp32(must_get(wm, base + "mlp.down_proj.weight"),    &blob[off_down]);
+            cast_to_fp32(must_get_shaped(wm, base + "self_attn.q_proj.weight", shp_q),    &blob[off_q]);
+            cast_to_fp32(must_get_shaped(wm, base + "self_attn.k_proj.weight", shp_kv),   &blob[off_k]);
+            cast_to_fp32(must_get_shaped(wm, base + "self_attn.v_proj.weight", shp_kv),   &blob[off_v]);
+            cast_to_fp32(must_get_shaped(wm, base + "self_attn.o_proj.weight", shp_o),    &blob[off_o]);
+            cast_to_fp32(must_get_shaped(wm, base + "mlp.gate_proj.weight",    shp_gate), &blob[off_gate]);
+            cast_to_fp32(must_get_shaped(wm, base + "mlp.up_proj.weight",      shp_up),   &blob[off_up]);
+            cast_to_fp32(must_get_shaped(wm, base + "mlp.down_proj.weight",    shp_down), &blob[off_down]);
 
             LayerWeightsRef& v = layer_views_[l];
             v.attn_norm = &nb[0];
@@ -261,13 +308,13 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
             const std::size_t off_down = off; off += sz_down;
             blob.resize(off);
 
-            cast_to_fp16(must_get(wm, base + "self_attn.q_proj.weight"), &blob[off_q]);
-            cast_to_fp16(must_get(wm, base + "self_attn.k_proj.weight"), &blob[off_k]);
-            cast_to_fp16(must_get(wm, base + "self_attn.v_proj.weight"), &blob[off_v]);
-            cast_to_fp16(must_get(wm, base + "self_attn.o_proj.weight"), &blob[off_o]);
-            cast_to_fp16(must_get(wm, base + "mlp.gate_proj.weight"),    &blob[off_gate]);
-            cast_to_fp16(must_get(wm, base + "mlp.up_proj.weight"),      &blob[off_up]);
-            cast_to_fp16(must_get(wm, base + "mlp.down_proj.weight"),    &blob[off_down]);
+            cast_to_fp16(must_get_shaped(wm, base + "self_attn.q_proj.weight", shp_q),    &blob[off_q]);
+            cast_to_fp16(must_get_shaped(wm, base + "self_attn.k_proj.weight", shp_kv),   &blob[off_k]);
+            cast_to_fp16(must_get_shaped(wm, base + "self_attn.v_proj.weight", shp_kv),   &blob[off_v]);
+            cast_to_fp16(must_get_shaped(wm, base + "self_attn.o_proj.weight", shp_o),    &blob[off_o]);
+            cast_to_fp16(must_get_shaped(wm, base + "mlp.gate_proj.weight",    shp_gate), &blob[off_gate]);
+            cast_to_fp16(must_get_shaped(wm, base + "mlp.up_proj.weight",      shp_up),   &blob[off_up]);
+            cast_to_fp16(must_get_shaped(wm, base + "mlp.down_proj.weight",    shp_down), &blob[off_down]);
 
             LayerWeightsRefFp16& v = layer_views_f16_[l];
             v.attn_norm = &nb[0];
@@ -307,25 +354,25 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
 
             // [N, K] dims for each matmul. Linear weight layout matches
             // matmul_int8w_f32a: [N=out_dim, K=in_dim] row-major.
-            quantize_int8_per_row(must_get(wm, base + "self_attn.q_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "self_attn.q_proj.weight", shp_q),
                                    n_q_dim, hidden,
                                    &wblob[off_q],    &sblob[s_q]);
-            quantize_int8_per_row(must_get(wm, base + "self_attn.k_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "self_attn.k_proj.weight", shp_kv),
                                    n_kv_dim, hidden,
                                    &wblob[off_k],    &sblob[s_k]);
-            quantize_int8_per_row(must_get(wm, base + "self_attn.v_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "self_attn.v_proj.weight", shp_kv),
                                    n_kv_dim, hidden,
                                    &wblob[off_v],    &sblob[s_v]);
-            quantize_int8_per_row(must_get(wm, base + "self_attn.o_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "self_attn.o_proj.weight", shp_o),
                                    hidden, n_q_dim,
                                    &wblob[off_o],    &sblob[s_o]);
-            quantize_int8_per_row(must_get(wm, base + "mlp.gate_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "mlp.gate_proj.weight",    shp_gate),
                                    intermediate, hidden,
                                    &wblob[off_gate], &sblob[s_gate]);
-            quantize_int8_per_row(must_get(wm, base + "mlp.up_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "mlp.up_proj.weight",      shp_up),
                                    intermediate, hidden,
                                    &wblob[off_up],   &sblob[s_up]);
-            quantize_int8_per_row(must_get(wm, base + "mlp.down_proj.weight"),
+            quantize_int8_per_row(must_get_shaped(wm, base + "mlp.down_proj.weight",    shp_down),
                                    hidden, intermediate,
                                    &wblob[off_down], &sblob[s_down]);
 

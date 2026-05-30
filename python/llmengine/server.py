@@ -28,6 +28,7 @@ from typing import Optional
 import janus
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field, ValidationError
 
 import llmengine
 
@@ -36,6 +37,28 @@ import llmengine
 # tool_calls, function_call}. Internal "capacity" maps to "length" (closest
 # semantic — we ran out of context room); "cancelled" maps to "stop" so
 # disconnecting clients don't see an unknown enum value.
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class CompletionRequest(BaseModel):
+    """OpenAI /v1/completions request body (subset). Pydantic enforces the
+    schema so bad types (prompt=list, max_tokens=str, …) become 422s
+    instead of bubbling up as 500s from the tokenizer or int()."""
+    model: Optional[str] = None
+    prompt: str
+    max_tokens: int = Field(default=16)
+    stream: bool = False
+
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = None
+    messages: list[ChatMessage]
+    max_tokens: int = Field(default=64)
+    stream: bool = False
+
+
 def _to_openai_finish(internal: str) -> str:
     # The OpenAI enum is {stop, length, content_filter, tool_calls,
     # function_call}. We map our internal terminal reasons onto it:
@@ -252,44 +275,55 @@ def build_app(model_dir: Optional[str] = None,
 
     # ----- endpoints -----
 
+    def _validate_generate_inputs(prompt_ids, max_tokens):
+        """Sync pre-flight matching engine.generate's contract. Run BEFORE
+        returning StreamingResponse so a bad streaming request surfaces as
+        400/422, not as a 200 stream that closes with finish_reason=stop
+        from the worker."""
+        if max_tokens < 0:
+            raise ValueError("max_tokens must be >= 0")
+        if not prompt_ids:
+            raise ValueError("prompt is empty")
+        if len(prompt_ids) + max_tokens > engine.max_pos:
+            raise RuntimeError(
+                f"prompt + max_tokens exceeds RoPE max_pos ({engine.max_pos})")
+
     @app.post("/v1/completions")
-    async def completions(body: dict, request: Request):
+    async def completions(body: CompletionRequest, request: Request):
         try:
-            prompt    = body.get("prompt", "")
-            max_tok   = int(body.get("max_tokens", 16))
-            stream    = bool(body.get("stream", False))
-            used_name = body.get("model", model_name)
-            prompt_ids = tok.encode(prompt, add_special_tokens=True)
-            if stream:
+            used_name = body.model or model_name
+            prompt_ids = tok.encode(body.prompt, add_special_tokens=True)
+            _validate_generate_inputs(prompt_ids, body.max_tokens)
+            if body.stream:
                 return StreamingResponse(
-                    _stream_sse(prompt_ids, max_tok, chat=False,
+                    _stream_sse(prompt_ids, body.max_tokens, chat=False,
                                 model_used=used_name, request=request),
                     media_type="text/event-stream")
-            out, finish = await _engine_call(engine.generate, prompt_ids, max_tok)
+            out, finish = await _engine_call(engine.generate, prompt_ids, body.max_tokens)
             return _completion_response(prompt_ids, out, finish, used_name)
         except ValueError as e:
-            # Engine validation errors (bad token ids, empty prompt, …).
+            # Bad inputs (empty prompt, negative max_tokens, out-of-range
+            # token ids if any slip through the tokenizer).
             return _error_response(400, e)
         except RuntimeError as e:
             # Engine runtime constraint violations (RoPE max_pos, etc.).
             return _error_response(422, e)
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(body: dict, request: Request):
+    async def chat_completions(body: ChatCompletionRequest, request: Request):
         try:
-            messages  = body.get("messages", [])
-            max_tok   = int(body.get("max_tokens", 64))
-            stream    = bool(body.get("stream", False))
-            used_name = body.get("model", model_name)
+            used_name = body.model or model_name
+            messages = [m.model_dump() for m in body.messages]
             prompt_text = tok.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True)
             prompt_ids = tok.encode(prompt_text, add_special_tokens=False)
-            if stream:
+            _validate_generate_inputs(prompt_ids, body.max_tokens)
+            if body.stream:
                 return StreamingResponse(
-                    _stream_sse(prompt_ids, max_tok, chat=True,
+                    _stream_sse(prompt_ids, body.max_tokens, chat=True,
                                 model_used=used_name, request=request),
                     media_type="text/event-stream")
-            out, finish = await _engine_call(engine.generate, prompt_ids, max_tok)
+            out, finish = await _engine_call(engine.generate, prompt_ids, body.max_tokens)
             return _chat_completion_response(prompt_ids, out, finish, used_name)
         except ValueError as e:
             return _error_response(400, e)

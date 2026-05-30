@@ -172,7 +172,9 @@ def test_non_stream_negative_max_tokens_returns_400(client) -> None:
     body = r.json()
     assert "error" in body
     assert body["error"]["type"] == "invalid_request_error"
-    assert "max_new_tokens" in body["error"]["message"]
+    # Message comes from the server-side pre-flight validator, which uses
+    # the same `max_tokens` field name that the request schema exposes.
+    assert "max_tokens" in body["error"]["message"]
 
 
 def test_non_stream_overflow_returns_422(client) -> None:
@@ -199,6 +201,60 @@ def test_non_stream_completions_overflow_returns_422(client) -> None:
     body = r.json()
     assert "error" in body
     assert body["error"]["type"] == "invalid_request_error"
+
+
+def test_streaming_negative_max_tokens_returns_400(client) -> None:
+    """Pre-stream sync validation: max_tokens<0 with stream=true must NOT
+    return a 200 SSE stream that closes with finish_reason=stop. The
+    validation runs before StreamingResponse is returned, so the client
+    sees a structured 400."""
+    r = client.post("/v1/chat/completions", json={
+        "model": "llama-3.2-1b-instruct",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": -1,
+        "stream": True,
+    })
+    assert r.status_code == 400, r.text
+    body = r.json()
+    assert "error" in body
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+def test_streaming_overflow_returns_422(client) -> None:
+    """Same as above but for the int-overflow / RoPE-cap path: stream=True
+    + max_tokens=INT_MAX must return 422, not a 200 stream."""
+    r = client.post("/v1/chat/completions", json={
+        "model": "llama-3.2-1b-instruct",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 2147483647,
+        "stream": True,
+    })
+    assert r.status_code == 422, r.text
+    body = r.json()
+    assert "error" in body
+    assert "RoPE max_pos" in body["error"]["message"]
+
+
+def test_malformed_completion_body_returns_422(client) -> None:
+    """Pydantic schema validation: prompt as a list (instead of str) used
+    to bubble up as a 500 from the tokenizer. With CompletionRequest
+    enforcing the schema, FastAPI returns 422 with the validation details."""
+    r = client.post("/v1/completions", json={
+        "model": "llama-3.2-1b-instruct",
+        "prompt": ["hello", "world"],   # list, schema wants str
+        "max_tokens": 4,
+    })
+    assert r.status_code == 422, r.text
+
+
+def test_malformed_chat_body_returns_422(client) -> None:
+    """messages as a string instead of a list of {role, content} → 422."""
+    r = client.post("/v1/chat/completions", json={
+        "model": "llama-3.2-1b-instruct",
+        "messages": "Hi",               # string, schema wants list
+        "max_tokens": 4,
+    })
+    assert r.status_code == 422, r.text
 
 
 def test_http_disconnect_cancels_worker_then_next_request_succeeds(client) -> None:

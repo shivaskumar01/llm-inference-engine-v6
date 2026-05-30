@@ -126,6 +126,55 @@ def test_tied_lm_head_alias_when_present(tmp_path: Path) -> None:
     assert embed_ptr == lm_ptr, "loader did not alias lm_head to embed"
 
 
+def test_transposed_linear_weight_rejected(tmp_path: Path) -> None:
+    """A linear weight whose numel matches but whose shape is transposed
+    (e.g. k_proj [128, 64] vs the expected [64, 128]) used to slip past
+    cast_to_fp32/fp16/quantize_int8_per_row because they only verified
+    numel. Now require_shape(name, {N, K}) fires before the cast."""
+    import json
+    import safetensors.numpy
+    import numpy as np
+
+    # Build a tiny model where the loader uses these dims:
+    #   q_proj: [n_q_dim=8, hidden=4]   k_proj/v_proj: [n_kv_dim=4, hidden=4]
+    # We'll save a k_proj transposed as [4, 4] swapped → [hidden=4, n_kv=4]
+    # Wait: 4x4 == 4x4 — so use n_kv_dim=2 to make it asymmetric:
+    #   intended k_proj shape: [n_kv_dim=2, hidden=4]
+    #   evil shape:            [hidden=4, n_kv_dim=2]    (numel still 8)
+    cfg = {
+        "hidden_size": 4, "intermediate_size": 8,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 2, "num_key_value_heads": 1, "head_dim": 2,
+        "vocab_size": 8, "max_position_embeddings": 16,
+        "rms_norm_eps": 1e-5, "rope_theta": 500000.0,
+        "tie_word_embeddings": True, "eos_token_id": [1, 2, 3],
+    }
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+    # All-zero tensors of the *right* shape except k_proj which is transposed.
+    tensors = {
+        "model.embed_tokens.weight":                 np.zeros((8, 4), dtype=np.float16),
+        "model.norm.weight":                         np.ones( (4,),   dtype=np.float16),
+        "model.layers.0.input_layernorm.weight":     np.ones( (4,),   dtype=np.float16),
+        "model.layers.0.post_attention_layernorm.weight": np.ones((4,), dtype=np.float16),
+        "model.layers.0.self_attn.q_proj.weight":    np.zeros((4, 4), dtype=np.float16),
+        # Evil: should be (n_kv_dim=2, hidden=4) but is (4, 2) — same numel.
+        "model.layers.0.self_attn.k_proj.weight":    np.zeros((4, 2), dtype=np.float16),
+        "model.layers.0.self_attn.v_proj.weight":    np.zeros((2, 4), dtype=np.float16),
+        "model.layers.0.self_attn.o_proj.weight":    np.zeros((4, 4), dtype=np.float16),
+        "model.layers.0.mlp.gate_proj.weight":       np.zeros((8, 4), dtype=np.float16),
+        "model.layers.0.mlp.up_proj.weight":         np.zeros((8, 4), dtype=np.float16),
+        "model.layers.0.mlp.down_proj.weight":       np.zeros((4, 8), dtype=np.float16),
+    }
+    safetensors.numpy.save_file(tensors, str(tmp_path / "model.safetensors"))
+
+    # The loader itself happens lazily; trigger via forward_logits which
+    # calls ensure_model_loaded.
+    e = llmengine.Engine(str(tmp_path))
+    with pytest.raises(RuntimeError, match="shape mismatch.*k_proj"):
+        e.forward_logits([0])
+
+
 def test_safetensors_byte_count_mismatch_rejected(tmp_path: Path) -> None:
     """A tensor whose data_offsets cover fewer bytes than shape*dtype must be
     rejected — before the fix the loader accepted shape=[8,4] dtype=F16
