@@ -74,6 +74,7 @@ set(CORE_SRC
   src/kv_cache.cpp
   src/paged_kv.cpp
   src/scheduler.cpp
+  src/parallel.cpp
 )
 
 add_library(llmengine_core STATIC ${CORE_SRC})

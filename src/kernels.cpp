@@ -1,4 +1,5 @@
 #include "llmengine/kernels.hpp"
+#include "llmengine/parallel.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -40,7 +41,10 @@ void matmul_f32(const float* a,
     // and reused across all M activation rows, so a batched decode step
     // (M = #running seqs) reads the weights ~M x fewer times. The per-element
     // dot is unchanged, so out[m,n] is bit-identical to the m-outer order.
-    for (int n = 0; n < N; ++n) {
+    // Output channels are split across the thread pool for large N; each
+    // out[m,n] is still one serial dot, so the result stays bit-identical.
+    parallel_for_rows(N, static_cast<std::int64_t>(N) * K, [&](int n_begin, int n_end) {
+    for (int n = n_begin; n < n_end; ++n) {
         const float* w_row = &w[static_cast<std::size_t>(n) * K];
         for (int m = 0; m < M; ++m) {
             const float* a_row = &a[static_cast<std::size_t>(m) * K];
@@ -49,6 +53,7 @@ void matmul_f32(const float* a,
             out[static_cast<std::size_t>(m) * N + n] = acc;
         }
     }
+    });
 }
 
 void embed_lookup_f32(const float* embedding,
@@ -66,7 +71,8 @@ void matmul_f16w_f32a(const float*  a,
                       int           N,
                       int           K,
                       float*        out) {
-    for (int n = 0; n < N; ++n) {
+    parallel_for_rows(N, static_cast<std::int64_t>(N) * K, [&](int n_begin, int n_end) {
+    for (int n = n_begin; n < n_end; ++n) {
         const __fp16* w_row = &w[static_cast<std::size_t>(n) * K];
         for (int m = 0; m < M; ++m) {
             const float* a_row = &a[static_cast<std::size_t>(m) * K];
@@ -76,6 +82,7 @@ void matmul_f16w_f32a(const float*  a,
             out[static_cast<std::size_t>(m) * N + n] = acc;
         }
     }
+    });
 }
 
 void matmul_int8w_f32a(const float*       a,
@@ -85,7 +92,8 @@ void matmul_int8w_f32a(const float*       a,
                        int                N,
                        int                K,
                        float*             out) {
-    for (int n = 0; n < N; ++n) {
+    parallel_for_rows(N, static_cast<std::int64_t>(N) * K, [&](int n_begin, int n_end) {
+    for (int n = n_begin; n < n_end; ++n) {
         const std::int8_t* w_row = &w[static_cast<std::size_t>(n) * K];
         const float scale_n = static_cast<float>(scales[n]);
         for (int m = 0; m < M; ++m) {
@@ -96,6 +104,7 @@ void matmul_int8w_f32a(const float*       a,
             out[static_cast<std::size_t>(m) * N + n] = acc * scale_n;
         }
     }
+    });
 }
 
 namespace {
@@ -237,7 +246,9 @@ void matmul_f32_neon(const float* a,
     // out[m, n] = sum_k a[m, k] * w[n, k]; W row-major [N, K].
     // Inner loop is a NEON-accelerated dot over K. Weight-stationary order
     // (n outer, m inner) reuses each w_row across the M activation rows.
-    for (int n = 0; n < N; ++n) {
+    // Output channels split across the thread pool for large N.
+    parallel_for_rows(N, static_cast<std::int64_t>(N) * K, [&](int n_begin, int n_end) {
+    for (int n = n_begin; n < n_end; ++n) {
         const float* w_row = &w[static_cast<std::size_t>(n) * K];
         for (int m = 0; m < M; ++m) {
             const float* a_row = &a[static_cast<std::size_t>(m) * K];
@@ -245,6 +256,7 @@ void matmul_f32_neon(const float* a,
                 neon_dot_f32(a_row, w_row, K);
         }
     }
+    });
 }
 
 void matmul_f16w_f32a_neon(const float*  a,
@@ -254,8 +266,10 @@ void matmul_f16w_f32a_neon(const float*  a,
                            int           K,
                            float*        out) {
     // Weight-stationary order (n outer, m inner): widen each w_row once and
-    // reuse it across the M activation rows.
-    for (int n = 0; n < N; ++n) {
+    // reuse it across the M activation rows. Output channels split across the
+    // thread pool for large N; each out[m,n] stays one serial accumulation.
+    parallel_for_rows(N, static_cast<std::int64_t>(N) * K, [&](int n_begin, int n_end) {
+    for (int n = n_begin; n < n_end; ++n) {
         const __fp16* w_row = &w[static_cast<std::size_t>(n) * K];
         for (int m = 0; m < M; ++m) {
             const float* a_row = &a[static_cast<std::size_t>(m) * K];
@@ -298,6 +312,7 @@ void matmul_f16w_f32a_neon(const float*  a,
             out[static_cast<std::size_t>(m) * N + n] = sum;
         }
     }
+    });
 }
 
 void matmul_int8w_f32a_neon(const float*       a,
@@ -308,8 +323,10 @@ void matmul_int8w_f32a_neon(const float*       a,
                             int                K,
                             float*             out) {
     // Weight-stationary order (n outer, m inner): load each int8 w_row once
-    // and reuse it across the M activation rows.
-    for (int n = 0; n < N; ++n) {
+    // and reuse it across the M activation rows. Output channels split across
+    // the thread pool for large N; each out[m,n] stays one serial accumulation.
+    parallel_for_rows(N, static_cast<std::int64_t>(N) * K, [&](int n_begin, int n_end) {
+    for (int n = n_begin; n < n_end; ++n) {
         const std::int8_t* w_row = &w[static_cast<std::size_t>(n) * K];
         for (int m = 0; m < M; ++m) {
             const float* a_row = &a[static_cast<std::size_t>(m) * K];
@@ -350,6 +367,7 @@ void matmul_int8w_f32a_neon(const float*       a,
             out[static_cast<std::size_t>(m) * N + n] = sum * static_cast<float>(scales[n]);
         }
     }
+    });
 }
 
 void rmsnorm_f32_neon(const float* x, const float* w, int dim, float eps, float* out) {

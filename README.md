@@ -56,6 +56,7 @@ continuous-batching scheduler.
 | Paged KV: BlockManager + PagedKVCache + `forward_logits_paged` | `src/paged_kv.cpp`, `src/engine.cpp` |
 | Static + Continuous batch schedulers (PREFILLING / RUNNING state machine, prefill budget, capacity termination) | `src/scheduler.cpp` |
 | True batched decode — running seqs share one `forward_decode_batch` (M=B weight-stationary GEMMs, per-seq attention) | `src/engine.cpp`, `src/scheduler.cpp` |
+| Row-parallel matmul over a P-core fork-join thread pool (`LLMENGINE_NUM_THREADS`) | `src/parallel.cpp`, `src/kernels.cpp` |
 | FastAPI server (`/v1/completions`, `/v1/chat/completions`, SSE streaming) | `python/llmengine/server.py` |
 | pybind11 bindings | `src/bindings.cpp` |
 
@@ -205,9 +206,11 @@ Quick wins from here:
 - **W16A16** full FP16 pipeline — uses `vfmlalq_*_f16` and halves the
   activation bandwidth too.
 
-The structural pieces (paged KV, chunked-prefill admission, batching
-scheduler, OpenAI server) are all in place; these are kernel-level
-optimizations on top.
+Row-parallel matmul (a P-core thread pool) has since landed — single-seq
+decode 4.3x and 8-seq batched 5.4x on 8 threads; see `benchmarks/results.md`.
+The structural pieces (paged KV, chunked-prefill admission, batched-decode
+scheduler, OpenAI server) are all in place; the quick wins above are
+remaining kernel-level optimizations on top.
 
 ---
 
@@ -226,8 +229,6 @@ honest delta between the resume line and the implementation:
 - **`convert_weights.py`** + engine-native binary format. Plan-deferred;
   on-the-fly bf16→fp16→int8 at load time made the disk format unnecessary
   for the resume artifact.
-- **`parallel.hpp` thread pool + row-parallel matmul.** Designed in v6
-  §4.2, never wired. Single-thread CPU was fine for the M=1 decode shape.
 - **`compare_llamacpp.py`** with `-ngl 0` baseline. Not yet shipped.
 - **Real PPL with sample size** on 10k+ tokens of wikitext-2 test split.
   Today's drift tests assert top-1 / top-5 on one short prompt.
@@ -246,12 +247,13 @@ are kernel and instrumentation work on top.
   for a custom on-disk format with `convert_weights.py`. Converting
   bf16→fp16→int8 on the fly at load time was simpler and the load time
   cost is amortized.
-- **The persistent thread pool was scoped but never wired.** It was fine
-  to defer while decode was M=1, but now that decode is batched (M=B) and
-  measured compute-bound, row-parallel / multi-threaded matmul is the
-  highest-leverage perf item left — it's what would turn the batched-decode
-  weight-read saving into an actual throughput multiplier (see
-  `benchmarks/results.md`).
+- **Row-parallel matmul should have come earlier.** Once it landed (a P-core
+  fork-join pool over output channels) single-seq decode jumped 4.3x and
+  batched 5.4x on 8 threads, and the batched-vs-per-seq win grew from 1.14x to
+  1.65x — threading is what made batched decode's weight-read saving actually
+  pay off. The surprise: defaulting to `hardware_concurrency()` is wrong on
+  Apple Silicon — the E-cores are stragglers in a fork-join, so the default
+  must be the P-core count (`hw.perflevel0.logicalcpu`).
 
 These are honest trade-offs, not regrets — the project meets every
 deliverable from the v6 plan that matters for an undergrad ML systems

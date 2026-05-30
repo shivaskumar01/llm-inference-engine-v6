@@ -39,7 +39,8 @@ gate/up/down/lm_head) run once at M = batch size against the weight-stationary
 kernels (each weight row read once, reused across the batch), while attention
 stays per-sequence (each seq has its own paged-KV history and RoPE position).
 Aggregate decode `tok/s` over the whole batch, real 1B INT8, scalar attention,
-`max_new=32`, vs the per-sequence static scheduler:
+`max_new=32`, **single-thread** (the Threading section below adds the
+multi-core numbers), vs the per-sequence static scheduler:
 
 ```
   B=2   static  agg_tok/s=5.77   continuous(batched)  agg_tok/s=9.98   1.73x
@@ -62,13 +63,50 @@ B sequences still do B× the multiply-accumulates. So continuous holds a ~flat
 ~9–10 tok/s single-thread compute ceiling across batch sizes, while the per-seq
 static path only climbs toward it as B grows and its per-call overhead
 amortizes. The win is largest at small B (overhead + weight-read amortization)
-and tapers as compute dominates. Turning this into the classic batching
-multiplier needs the compute parallelized first (row-parallel / multi-threaded
-matmul — see gaps); once decode is bandwidth-bound, the B× weight-read saving
-that batching already provides converts directly into throughput.
+and tapers as compute dominates. The **Threading** section below confirms the
+mechanism: parallelizing the matmul lifts the compute ceiling until weight
+bandwidth — which batched decode cuts B× — starts to bind, and the batching win
+then grows from 1.14x (1 thread) to 1.65x (8 threads).
 
 A real p99 inter-token-latency measurement requires per-token wall-clock hooks
 inside the scheduler — that wiring is still a known gap.
+
+## Threading (row-parallel matmul)
+
+`parallel.hpp` adds a process-global fork-join pool; the matmul kernels split
+their output channels [0, N) across it (large N only — tiny matmuls stay serial
+via an N*K work threshold, so the tiny-fixture suite never even spawns the
+pool). Each `out[m,n]` is still one serial dot, so results are bit-for-bit
+identical and every numerical-equality gate holds with threading on.
+
+Default thread count = the **performance-core count** via
+`sysctl hw.perflevel0.logicalcpu`, *not* `hardware_concurrency()`. This matters:
+on this 8P+4E machine, handing chunks to the 4 slow E-cores (12 threads) makes
+the even-split fork-join block on E-core stragglers and *tanks* the per-seq
+path (12-thread lockstep measured slower than single-thread). Override with
+`LLMENGINE_NUM_THREADS`.
+
+Real 1B INT8, best-of-3 (to exclude thermal noise from sustained runs):
+
+```
+  threads   single-seq decode (generate, max_new=48)
+  1          9.7 tok/s
+  4         33.8 tok/s  (3.5x)
+  8         41.7 tok/s  (4.3x)   <- P-core default
+
+  threads   8-seq batched throughput (continuous, max_new=32)
+  1          9.3 tok/s
+  8         50.5 tok/s  (5.4x)
+```
+
+Threading and batching **compound**: at 1 thread the batched-vs-per-seq win is
+1.14x, but at 8 threads it is 1.65x (50.5 vs 30.6 tok/s) — parallelizing the
+compute lifts the FLOP ceiling until weight bandwidth (which batched decode
+already cuts B×) becomes the binding constraint. That is exactly the win
+batched decode was built to deliver, now realized.
+
+Not yet threaded: the attention kernel (per-head parallelism is the natural
+next step) and a lower-overhead pool for the overhead-sensitive M=1 path.
 
 ## Streaming + cancellation (Phase 8)
 
@@ -105,11 +143,10 @@ results in `on_done("cancelled")` with zero `on_token` calls
 - **Real-PPL columns** with sample size on a 10k+ token wikitext sample —
   the v6 plan's accuracy gate. Drift tests today only assert top-1 / top-5
   on a single short prompt.
-- **Persistent thread pool + row-parallel matmul** — designed in v6 §4.2,
-  never wired. Now the key perf lever: parallelizing the per-token FMAs is
-  what moves decode from compute-bound to bandwidth-bound, at which point the
-  B× weight-read saving that batched decode already provides converts into
-  real aggregate throughput.
+- **Persistent thread pool + row-parallel matmul** — DONE (`parallel.hpp`).
+  Output channels split across a P-core fork-join pool: single-seq decode 4.3x
+  and 8-seq batched 5.4x on 8 threads (see Threading above). Remaining: thread
+  the attention kernel (per-head), and a lower-overhead pool for the M=1 path.
 
 The structural pieces (paged KV, chunked-prefill admission, streaming +
 cancellation, OpenAI server) are all in place; the open items are
