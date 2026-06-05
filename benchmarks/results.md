@@ -134,11 +134,21 @@ results in `on_done("cancelled")` with zero `on_token` calls
 
 ## Known gaps (open)
 
-- **W16A16 activations** — engine activations and scratch are still FP32
-  even in fp16/int8 weight modes. The plan's "W8A16" name was aspirational
-  for this implementation; what shipped is W8A32 (and W8A16 only insofar
-  as KV is FP16). Closing this requires replumbing every activation
-  buffer (`h`, `h_norm`, `q_buf`, etc.) and the kernel signatures.
+- **W16A16 activations** — TRIED (scoped: FP16 activation at the matmul
+  boundaries via FMLAL, fp16 mode) and **reverted**. The FMLAL matmul is ~1.2x
+  single-thread, but at the default 8 P-cores fp16 decode went 36.2 -> 35.6
+  tok/s (flat / slightly negative): once threaded the matmul is
+  weight-memory-bandwidth-bound and FMLAL only speeds compute, so the win
+  vanishes — not worth the FP16-activation precision shave for a
+  single-thread-only gain. The real lever is fewer weight *bytes*, not
+  activation precision (see INT4 below).
+- **INT4 (or lower-bit) weights** — the actual remaining decode lever. Decode
+  at the default thread count is weight-memory-bandwidth-bound, so throughput
+  tracks weight *bytes read*: fp16 -> int8 already helped (half the bytes), and
+  int4 would roughly halve again. The session's compute-side experiments (hand
+  NEON attention, W16A16 FMLAL) both measured as no-ops here precisely because
+  compute isn't the bottleneck once threaded — only cutting weight bytes
+  (quantization) or weight re-reads (batched decode, done) moves decode.
 - **True batched decode** — DONE. `decode_running` now stacks the running
   batch into one `forward_decode_batch` (weight-stationary GEMMs at M=B, with
   per-seq attention) and is bit-for-bit equal to per-seq decode. The
