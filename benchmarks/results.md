@@ -140,15 +140,19 @@ results in `on_done("cancelled")` with zero `on_token` calls
   tok/s (flat / slightly negative): once threaded the matmul is
   weight-memory-bandwidth-bound and FMLAL only speeds compute, so the win
   vanishes — not worth the FP16-activation precision shave for a
-  single-thread-only gain. The real lever is fewer weight *bytes*, not
-  activation precision (see INT4 below).
-- **INT4 (or lower-bit) weights** — the actual remaining decode lever. Decode
-  at the default thread count is weight-memory-bandwidth-bound, so throughput
-  tracks weight *bytes read*: fp16 -> int8 already helped (half the bytes), and
-  int4 would roughly halve again. The session's compute-side experiments (hand
-  NEON attention, W16A16 FMLAL) both measured as no-ops here precisely because
-  compute isn't the bottleneck once threaded — only cutting weight bytes
-  (quantization) or weight re-reads (batched decode, done) moves decode.
+  single-thread-only gain. The real lever is the int-dot quant path
+  (W8A8/sdot), not activation precision (see INT4 below).
+- **INT4 weights** — PROBED (per-row W4A32 NEON matmul, half the weight bytes)
+  and **not a win**: vs int8 at 8 threads it was net neutral-to-slower (q/o
+  0.92x, gate/up 0.76x, down 1.03x); only the huge `lm_head` benefited (1.57x —
+  the one matmul big enough to be *purely* memory-bound). The nibble-unpack
+  compute cancels the byte savings everywhere else, and per-row int4 accuracy is
+  ~20x worse than int8 (unusable; group-wise is more accurate but slower). This
+  corrects an earlier overclaim that "int4 is the lever" — measured with FP32
+  activations, it isn't. The genuine quant lever is **W8A8 / W4A8**: quantize
+  *activations* to int8 and use the hardware SDOT / i8mm int-dot (no FP32 widen
+  — how llama.cpp gets fast int4). That needs a dynamic activation-quant
+  pipeline + sdot kernels — the real remaining "v2 stretch", not attempted.
 - **True batched decode** — DONE. `decode_running` now stacks the running
   batch into one `forward_decode_batch` (weight-stationary GEMMs at M=B, with
   per-seq attention) and is bit-for-bit equal to per-seq decode. The
