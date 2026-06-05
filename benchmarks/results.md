@@ -106,15 +106,19 @@ already cuts B×) becomes the binding constraint. That is exactly the win
 batched decode was built to deliver, now realized.
 
 The attention kernel is threaded too (per-head): at seq_len=4096 it drops
-1.87 -> 0.86 ms/call (2.2x), plateauing there because it becomes
-memory-bandwidth-bound (the inner q·k and weighted-sum dots are still scalar).
-End-to-end this is small — at Llama-1B dimensions attention is <1% of prefill
-and ~5–10% of long-context decode FLOPs (the matmuls dominate), so the value is
-removing the last serial hot loop and keeping attention off the critical path
-at very long context, not a headline tok/s jump.
+1.55 -> 0.26 ms/call (5.9x, best-of-50) — near-linear on the 8 P-cores, only
+slightly sub-linear at very long context where the K/V reads start to bind
+memory bandwidth. End-to-end this is still small — at Llama-1B dimensions
+attention is <1% of prefill and ~5–10% of long-context decode FLOPs (the
+matmuls dominate), so the value is removing the last serial hot loop, not a
+headline tok/s jump.
 
-Still open: a NEON / fused attention kernel, and a lower-overhead pool for the
-overhead-sensitive M=1 path.
+Hand-written NEON attention was tried and *reverted*: under the perf build's
+`-O3 -ffast-math` the compiler already auto-vectorizes the scalar q·k and
+weighted-V loops, and the explicit-intrinsic version measured ~0.8x (slower).
+So the remaining attention lever is fusion, not SIMD — an online-softmax kernel
+that walks the paged blocks directly and skips the gather copy, targeting the
+memory-bound regime. A lower-overhead pool for the M=1 path is also open.
 
 ## Streaming + cancellation (Phase 8)
 
@@ -154,8 +158,10 @@ results in `on_done("cancelled")` with zero `on_token` calls
 - **Persistent thread pool + row-parallel matmul** — DONE (`parallel.hpp`).
   Output channels split across a P-core fork-join pool: single-seq decode 4.3x
   and 8-seq batched 5.4x on 8 threads, and the attention head loop is threaded
-  too (2.2x at seq_len=4096); see Threading above. Remaining: a NEON / fused
-  attention kernel, and a lower-overhead pool for the M=1 path.
+  too (5.9x at seq_len=4096); see Threading above. Remaining: fused attention
+  (online softmax + skip the gather copy — hand-written NEON wasn't a win, the
+  compiler already auto-vectorizes the scalar loops), and a lower-overhead pool
+  for the M=1 path.
 
 The structural pieces (paged KV, chunked-prefill admission, streaming +
 cancellation, OpenAI server) are all in place; the open items are
