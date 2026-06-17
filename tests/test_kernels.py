@@ -207,12 +207,12 @@ def test_attention_gqa(num_q: int, num_kv: int, hd: int, seq_len: int) -> None:
 
 
 def test_attention_gqa_long_context_threaded() -> None:
-    """Long context (seq_len=512, 32 q-heads — real Llama-1B attention shape)
+    """Long context (seq_len=512, 32 q-heads, real Llama-1B attention shape)
     pushes attention_f32 past the parallel-work threshold, so the head loop
     runs across the thread pool. Heads write disjoint out[h] slices, so the
     threaded result must still match the torch GQA reference. The looser atol
     vs the short cases is only because a 512-term softmax + weighted sum
-    accumulates more FP error — the head split itself is bit-identical to
+    accumulates more FP error, the head split itself is bit-identical to
     serial."""
     num_q, num_kv, hd, seq_len = 32, 8, 64, 512
     rng = np.random.default_rng(20250530)

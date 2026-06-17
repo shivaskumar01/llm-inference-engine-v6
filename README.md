@@ -1,35 +1,35 @@
 # llm-engine
 
-A from-scratch C++17 inference engine for Llama 3.2 1B-Instruct on Apple
-Silicon, built bottom-up from the kernel layer through paged attention,
-continuous batching, and an OpenAI-compatible HTTP server.
+I wrote a C++17 inference engine for Llama 3.2 1B-Instruct on Apple Silicon
+from scratch. It builds bottom-up, from the kernel layer through paged
+attention, continuous batching, and an OpenAI-compatible HTTP server.
 
-**Status:** the structural surface of all 8 v6 phases is in place and
+Status: the structural surface of all 8 v6 phases is in place and
 green under test (112 tests across kernels, tiny+real-1B equivalence,
-paged KV, schedulers, streaming, OpenAI-compatible HTTP) — but the v6
-plan is **not fully shipped**. The "What's *not* there" section below
+paged KV, schedulers, streaming, OpenAI-compatible HTTP), but the v6
+plan is not fully shipped. The "What's *not* there" section below
 enumerates the parts that are still missing or aspirational (W16A16
 activations, paged-KV FP16, `convert_weights.py`, the persistent thread
 pool, `compare_llamacpp.py`, real PPL with sample sizes). Treat this repo
 as "v6-shaped and resume-defensible" rather than "v6-complete." A separate
 code review against the plan turned up four real gaps that were fixed in a
 P1 follow-up:
-1. **Streaming** in `server.py` now uses `janus.Queue` + the v6 timeout-bug
+1. Streaming in `server.py` now uses `janus.Queue` + the v6 timeout-bug
    fix (try/except inside the loop), real `request.is_disconnected()`
-   polling, and a `CancelToken` plumbed through to the engine — replacing
+   polling, and a `CancelToken` plumbed through to the engine, replacing
    an earlier `engine.generate(cur, 1)` loop that didn't honor the design.
-2. **Scheduler off-by-one** — `max_new_tokens=1` now produces exactly one
+2. Scheduler off-by-one, `max_new_tokens=1` now produces exactly one
    generated token; before the prefill-end sample + decode-step double-fire,
    it produced two.
-3. **FP16 KV** in fp16 / int8 engine modes (`ContiguousKVCache::Dtype::F16`);
+3. FP16 KV in fp16 / int8 engine modes (`ContiguousKVCache::Dtype::F16`);
    FP32 KV stays for `dtype=fp32` so the Phase 1 hard logit gates keep
    passing.
-4. **`_debug_weight_ptr`** is now gated behind `LLMENGINE_DEBUG_BINDINGS`
+4. `_debug_weight_ptr` is now gated behind `LLMENGINE_DEBUG_BINDINGS`
    (on in correctness builds, off in perf).
 
 Remaining honest gaps are listed in [`benchmarks/results.md`](benchmarks/results.md)
 ("Known gaps") and in this README's "What's *not* there" section. The
-biggest one is that activations are still FP32 throughout — what shipped
+biggest one is that activations are still FP32 throughout, what shipped
 is W8A32 (not the v6 W8A16 aspiration), with FP16 KV cache.
 
 ```
@@ -55,14 +55,14 @@ continuous-batching scheduler.
 | ContiguousKVCache | `src/kv_cache.cpp` |
 | Paged KV: BlockManager + PagedKVCache + `forward_logits_paged` | `src/paged_kv.cpp`, `src/engine.cpp` |
 | Static + Continuous batch schedulers (PREFILLING / RUNNING state machine, prefill budget, capacity termination) | `src/scheduler.cpp` |
-| True batched decode — running seqs share one `forward_decode_batch` (M=B weight-stationary GEMMs, per-seq attention) | `src/engine.cpp`, `src/scheduler.cpp` |
+| True batched decode, running seqs share one `forward_decode_batch` (M=B weight-stationary GEMMs, per-seq attention) | `src/engine.cpp`, `src/scheduler.cpp` |
 | Row-parallel matmul + per-head attention over a P-core fork-join thread pool (`LLMENGINE_NUM_THREADS`) | `src/parallel.cpp`, `src/kernels.cpp` |
 | FastAPI server (`/v1/completions`, `/v1/chat/completions`, SSE streaming) | `python/llmengine/server.py` |
 | pybind11 bindings | `src/bindings.cpp` |
 
 Two build modes, both green on the full test suite:
-- **correctness** — `-O2`, no `-ffast-math`, FP32 scalar kernels. Deterministic.
-- **perf** — `-O3`, `-ffast-math`, NEON FP16/INT8 paths. Soft drift gates.
+- correctness, `-O2`, no `-ffast-math`, FP32 scalar kernels. Deterministic.
+- perf, `-O3`, `-ffast-math`, NEON FP16/INT8 paths. Soft drift gates.
 
 ---
 
@@ -161,8 +161,8 @@ tests/test_server.py                15    FastAPI /v1/* + SSE + cancellation + 4
 ```
 
 Correctness build runs all 112. Perf build runs 107 + 5 skips (the five
-debug-binding tests — four `_debug_weight_ptr` lookups plus the runtime
-tied-share check — skip because `_debug_*_ptr` accessors are gated to
+debug-binding tests, four `_debug_weight_ptr` lookups plus the runtime
+tied-share check, skip because `_debug_*_ptr` accessors are gated to
 correctness via `LLMENGINE_DEBUG_BINDINGS`). Both green.
 
 ---
@@ -178,14 +178,14 @@ Real Llama 3.2 1B-Instruct, single-sequence decode on Apple Silicon:
 | FP16 weights | ~2.7 GiB (linear FP16 + embed FP32 + lm_head FP16 copy) | 10.61 | 1.11× |
 | INT8 weights | ~2.13 GiB (linear INT8 + embed FP32 + lm_head INT8 copy) | 11.27 | 1.18× |
 
-INT8 cuts the *linear-weight* portion by 4× vs FP32 with **top-1 accuracy
-preserved** (top-5 set overlap 4.5/5 on average, decoded output identical
+INT8 cuts the *linear-weight* portion by 4× vs FP32 with top-1 accuracy
+preserved (top-5 set overlap 4.5/5 on average, decoded output identical
 to FP32). Static-memory totals are higher than the linear-weight portion
 alone because `embed_tokens` always lives in FP32 (~525 MiB) and the F16
-/ I8 `lm_head` matrices are materialized separately — only the tied
-**F32** path actually aliases lm_head into embed. F16/I8 embed
+/ I8 `lm_head` matrices are materialized separately, only the tied
+F32 path actually aliases lm_head into embed. F16/I8 embed
 quantization is a documented follow-up. Decode speedup is modest vs the
-bytes-saved ratio because the matmul is no longer the bottleneck —
+bytes-saved ratio because the matmul is no longer the bottleneck, 
 attention, RMSNorm, FFN element-wise ops, and the unfused softmax
 dominate at this scale.
 
@@ -199,14 +199,14 @@ By measurement, the remaining cost lives in:
 - FP16 → FP32 widening inside the matmul kernel
 
 Quick wins from here:
-- **W8A8** with `vdotq_s32` — needs activation calibration but unlocks
+- W8A8 with `vdotq_s32`, needs activation calibration but unlocks
   real INT8 throughput rather than just smaller reads.
-- **Fused paged attention** with in-kernel block walk + online softmax —
+- Fused paged attention with in-kernel block walk + online softmax, 
   cuts the gather copy and the softmax pass.
-- **W16A16** full FP16 pipeline — uses `vfmlalq_*_f16` and halves the
+- W16A16 full FP16 pipeline, uses `vfmlalq_*_f16` and halves the
   activation bandwidth too.
 
-Row-parallel matmul (a P-core thread pool) has since landed — single-seq
+Row-parallel matmul (a P-core thread pool) has since landed, single-seq
 decode 4.3x and 8-seq batched 5.4x on 8 threads; see `benchmarks/results.md`.
 The structural pieces (paged KV, chunked-prefill admission, batched-decode
 scheduler, OpenAI server) are all in place; the quick wins above are
@@ -219,43 +219,43 @@ remaining kernel-level optimizations on top.
 These were called out in code review against the v6 plan and are the
 honest delta between the resume line and the implementation:
 
-- **W16A16 activations.** Activation buffers (`h`, `h_norm`, `q_buf`,
+- W16A16 activations. Activation buffers (`h`, `h_norm`, `q_buf`,
   `k_buf`, `v_buf`, …) are still FP32 in every engine dtype mode. What
   shipped is W8A32 with FP16 KV. The v6 "W8A16" line was aspirational.
-- **Paged-KV FP16.** `ContiguousKVCache` is FP16 in fp16/int8 modes;
+- Paged-KV FP16. `ContiguousKVCache` is FP16 in fp16/int8 modes;
   `BlockManager` + `PagedKVCache` are still FP32.
-- **W8A8 + `vdotq_s32`.** Needs activation calibration; unlocks real
+- W8A8 + `vdotq_s32`. Needs activation calibration; unlocks real
   INT8 throughput rather than just smaller reads.
-- **`convert_weights.py`** + engine-native binary format. Plan-deferred;
+- `convert_weights.py` + engine-native binary format. Plan-deferred;
   on-the-fly bf16→fp16→int8 at load time made the disk format unnecessary
   for the resume artifact.
-- **`compare_llamacpp.py`** with `-ngl 0` baseline. Not yet shipped.
-- **Real PPL with sample size** on 10k+ tokens of wikitext-2 test split.
+- `compare_llamacpp.py` with `-ngl 0` baseline. Not yet shipped.
+- Real PPL with sample size on 10k+ tokens of wikitext-2 test split.
   Today's drift tests assert top-1 / top-5 on one short prompt.
 
-The structural pieces — paged KV, chunked-prefill admission, streaming +
-cancellation, OpenAI server — are all in place and tested; the open items
+The structural pieces, paged KV, chunked-prefill admission, streaming +
+cancellation, OpenAI server, are all in place and tested; the open items
 are kernel and instrumentation work on top.
 
 ## What I'd do differently if starting over
 
-- **Pick the W16A16 pipeline first**, not the W*A32 stepping stones.
+- Pick the W16A16 pipeline first, not the W*A32 stepping stones.
   Halving activations alongside weights is where the real perf headroom
   is on Apple Silicon, and routing everything through FP32 activations
   added a complete second set of kernel signatures for marginal gain.
-- **Skip the engine-native binary format**. The original v6 plan called
+- Skip the engine-native binary format. The original v6 plan called
   for a custom on-disk format with `convert_weights.py`. Converting
   bf16→fp16→int8 on the fly at load time was simpler and the load time
   cost is amortized.
-- **Row-parallel matmul should have come earlier.** Once it landed (a P-core
+- Row-parallel matmul should have come earlier. Once it landed (a P-core
   fork-join pool over output channels) single-seq decode jumped 4.3x and
   batched 5.4x on 8 threads, and the batched-vs-per-seq win grew from 1.14x to
-  1.65x — threading is what made batched decode's weight-read saving actually
+  1.65x, threading is what made batched decode's weight-read saving actually
   pay off. The surprise: defaulting to `hardware_concurrency()` is wrong on
-  Apple Silicon — the E-cores are stragglers in a fork-join, so the default
+  Apple Silicon, the E-cores are stragglers in a fork-join, so the default
   must be the P-core count (`hw.perflevel0.logicalcpu`).
 
-These are honest trade-offs, not regrets — the project meets every
+These are honest trade-offs, not regrets, the project meets every
 deliverable from the v6 plan that matters for an undergrad ML systems
 portfolio: from-scratch kernel work, a real numerical correctness gate
 against HF transformers, the structural innovations (paged KV +
@@ -280,6 +280,3 @@ HTTP serving surface.
 ├── data/                # .gitignore'd: model weights
 └── build/{correctness,perf}/
 ```
-
-Plan history and the design lives in
-`~/.claude/plans/plan-each-phase-carefully-fuzzy-cupcake.md` (v6).

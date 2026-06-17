@@ -1,6 +1,6 @@
 """Phase 2: smoke test on the real Llama 3.2 1B-Instruct checkpoint.
 
-This is the only place we touch real 1B in correctness mode — scalar FP32
+This is the only place we touch real 1B in correctness mode, scalar FP32
 forward of a real 1B model takes a few seconds per call. The full Phase 1
 test suite stays on the tiny fixture for fast iteration.
 
@@ -90,7 +90,7 @@ def test_tied_lm_head_alias(real_engine: llmengine.Engine) -> None:
 )
 def test_tied_lm_head_shares_buffer_at_runtime(real_engine: llmengine.Engine) -> None:
     """Pre-fix, ModelWeightsRef::load copied embed_tokens into a separate
-    lm_head_f32_ buffer — ~1 GB redundant on real 1B. After the fix, the
+    lm_head_f32_ buffer, ~1 GB redundant on real 1B. After the fix, the
     F32 lm_head pointer aliases embed_tokens. Without this test the
     raw-checkpoint alias passes (because of the WeightMap fixup) while the
     runtime materialization silently duplicates the buffer."""
@@ -98,7 +98,7 @@ def test_tied_lm_head_shares_buffer_at_runtime(real_engine: llmengine.Engine) ->
     lm_runtime    = real_engine._debug_lm_head_f32_ptr()
     assert embed_runtime == lm_runtime, (
         "tied F32 lm_head is materialized as a separate buffer instead of "
-        "aliasing embed_tokens — this is the ~1 GB memory regression"
+        "aliasing embed_tokens, this is the ~1 GB memory regression"
     )
 
 

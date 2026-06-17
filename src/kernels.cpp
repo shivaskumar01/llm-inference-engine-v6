@@ -421,7 +421,7 @@ void attention_f32(const float* q,
     const int group_size = num_q_heads / num_kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    // Heads are independent — each writes a disjoint out[h] slice — so split
+    // Heads are independent, each writes a disjoint out[h] slice, so split
     // them across the thread pool. parallel_for_rows only forks for long
     // contexts (work = heads*seq_len*head_dim past the threshold); short-context
     // decode stays serial since attention is cheap there. Each head's softmax +

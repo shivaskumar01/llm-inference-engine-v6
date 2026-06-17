@@ -10,7 +10,7 @@ The streaming path uses the v6 design:
   - A janus.Queue bridges the engine thread → asyncio loop.
   - The SSE loop polls request.is_disconnected each iteration and waits for
     the next token with a 100 ms timeout (try/except inside the loop so a
-    quiet 100 ms doesn't terminate the stream — the v6 streaming-bug fix).
+    quiet 100 ms doesn't terminate the stream, the v6 streaming-bug fix).
   - On disconnect, cancel_token.cancel() flips a flag the engine checks
     between forward steps, draining the worker without waste.
 """
@@ -35,7 +35,7 @@ import llmengine
 
 # Internal finish_reason → OpenAI's enum {stop, length, content_filter,
 # tool_calls, function_call}. Internal "capacity" maps to "length" (closest
-# semantic — we ran out of context room); "cancelled" maps to "stop" so
+# semantic, we ran out of context room); "cancelled" maps to "stop" so
 # disconnecting clients don't see an unknown enum value.
 class ChatMessage(BaseModel):
     role: str
@@ -90,7 +90,7 @@ def build_app(model_dir: Optional[str] = None,
     # The Engine serializes forward_logits/generate/generate_streaming via
     # an internal mutex, so concurrent HTTP requests are correctness-safe.
     # We additionally pin engine work to a single-thread executor so we
-    # don't pile up worker threads queued on the same mutex — FastAPI's
+    # don't pile up worker threads queued on the same mutex, FastAPI's
     # asyncio.to_thread default would use the shared executor (40+ threads
     # in 3.12) and stack many concurrent calls in front of a single lock.
     engine_pool = concurrent.futures.ThreadPoolExecutor(
@@ -226,7 +226,7 @@ def build_app(model_dir: Optional[str] = None,
                     cancel_token.cancel()
 
                 # Poll the engine thread. A 100 ms quiet window is normal on
-                # CPU inference — DO NOT exit the stream; the try/except sits
+                # CPU inference, DO NOT exit the stream; the try/except sits
                 # INSIDE the loop and continues (v6 streaming-bug fix).
                 try:
                     item = await asyncio.wait_for(q.async_q.get(), timeout=0.1)
@@ -242,7 +242,7 @@ def build_app(model_dir: Optional[str] = None,
                         if exc is not None:
                             yield chunk(None, _to_openai_finish("error"))
                             break
-                        # Worker finished cleanly without enqueuing DONE —
+                        # Worker finished cleanly without enqueuing DONE,
                         # shouldn't happen, but treat as a normal close.
                         yield chunk(None, "stop")
                         break
@@ -256,7 +256,7 @@ def build_app(model_dir: Optional[str] = None,
                 # boundaries don't emit `�`.
                 buffer.append(item)
                 text = tok.decode(buffer)
-                if text.endswith("�"):  # partial UTF-8 — hold
+                if text.endswith("�"):  # partial UTF-8, hold
                     continue
                 delta = text[len(prev_text):]
                 prev_text = text

@@ -99,7 +99,7 @@ def test_batched_decode_ragged_matches_single_seq(tiny_setup) -> None:
     prompts are admitted together (max_concurrent >= len, generous prefill
     budget) so they sit in RUNNING simultaneously and decode through one
     forward_decode_batch call with B>1 each step. Each sequence's token stream
-    must still equal what engine.generate() produces for it alone — i.e. the
+    must still equal what engine.generate() produces for it alone, i.e. the
     weight-stationary matmul reorder and the [B,H] activation stacking perturb
     no sequence's logits, and ragged lengths / per-seq RoPE positions stay
     correct under batching."""
@@ -133,7 +133,7 @@ def test_continuous_scheduler_rejects_invalid_knobs(tiny_setup,
                                                      max_concurrent, budget) -> None:
     """Without validation, run_until_idle() would spin forever:
     max_concurrent<=0 blocks every admission; budget<=0 blocks every
-    prefill advance — step() keeps returning 'not idle' with no progress."""
+    prefill advance, step() keeps returning 'not idle' with no progress."""
     engine, cfg = tiny_setup
     mgr = _make_mgr(cfg)
     with pytest.raises(ValueError):
@@ -196,7 +196,7 @@ def test_scheduler_enqueue_rejects_over_rope_request(tiny_setup, which) -> None:
 
 def test_continuous_scheduler_results_in_enqueue_order(tiny_setup) -> None:
     """scheduler.hpp documents results in enqueue order. The internal
-    storage is completion order — a long seq enqueued before a short one
+    storage is completion order, a long seq enqueued before a short one
     would otherwise land in results[1]. The accessor sorts by seq_id."""
     engine, cfg = tiny_setup
     mgr = _make_mgr(cfg, num_blocks=32, block_size=4)
@@ -280,7 +280,7 @@ def test_schedulers_match_engine_generate_token_count(tiny_setup, max_new) -> No
     assert r_cont.finish_reason == ref_finish
 
 
-# ----- Capacity exhaustion is non-fatal — seq terminates with reason -------
+# ----- Capacity exhaustion is non-fatal, seq terminates with reason -------
 
 def test_continuous_capacity_termination(tiny_setup) -> None:
     """Tiny pool that can hold one short seq but not two. The second seq

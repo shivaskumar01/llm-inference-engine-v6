@@ -1,6 +1,6 @@
 """Phase 8: FastAPI server smoke.
 
-Uses fastapi.testclient.TestClient (httpx under the hood, in-process — no
+Uses fastapi.testclient.TestClient (httpx under the hood, in-process, no
 network or socket). For both /v1/chat/completions and /v1/completions we
 check the full OpenAI response shape (id/object/created/model/choices/usage)
 and the streaming SSE format (data: ... \\n\\n + [DONE]).
@@ -154,7 +154,7 @@ def test_generate_streaming_cancel_mid_stream() -> None:
         cancel,
     )
     assert done == ["cancelled"]
-    # Engine should stop shortly after the cancel signal — definitely not run
+    # Engine should stop shortly after the cancel signal, definitely not run
     # to the 20-token cap. A small allowance for the in-flight step.
     assert 2 <= len(tokens) <= 4, f"got {len(tokens)} tokens, expected ~2-3"
 
@@ -270,7 +270,7 @@ def test_http_disconnect_cancels_worker_then_next_request_succeeds(client) -> No
         "stream": True,
     }) as resp:
         assert resp.status_code == 200
-        # Read just a couple chunks and break — TestClient closes the
+        # Read just a couple chunks and break, TestClient closes the
         # connection on context exit, which surfaces as is_disconnected()=True
         # on the server side.
         seen = 0
@@ -284,7 +284,7 @@ def test_http_disconnect_cancels_worker_then_next_request_succeeds(client) -> No
     # `await worker` resolves, engine mutex released).
     time.sleep(0.5)
 
-    # Next request must run successfully — if the worker hung or the mutex
+    # Next request must run successfully, if the worker hung or the mutex
     # leaked, this would block forever.
     r = client.post("/v1/chat/completions", json={
         "model": "llama-3.2-1b-instruct",

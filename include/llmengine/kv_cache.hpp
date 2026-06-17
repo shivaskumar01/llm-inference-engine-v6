@@ -9,9 +9,9 @@ namespace llmengine {
 // Contiguous (non-paged) KV cache for a single request.
 //
 // Storage dtype is chosen at construction:
-//   Dtype::F32 — k/v stored as float; k_layer()/v_layer() return raw pointers
+//   Dtype::F32, k/v stored as float; k_layer()/v_layer() return raw pointers
 //                that the FP32 attention kernel consumes directly (no gather).
-//   Dtype::F16 — k/v stored as __fp16; engine.cpp gathers into FP32 scratch
+//   Dtype::F16, k/v stored as __fp16; engine.cpp gathers into FP32 scratch
 //                via view_layer() before calling attention. Halves the cache's
 //                memory footprint relative to FP32.
 class ContiguousKVCache {

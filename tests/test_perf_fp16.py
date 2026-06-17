@@ -2,7 +2,7 @@
 
 The engine's FP32 path is the reference; the FP16 path stores linear weights
 as __fp16 and consumes them via matmul_f16w_f32a_neon. Weights are quantized
-to FP16 at load time, so we expect ~FP16-ULP perturbation in logits — small
+to FP16 at load time, so we expect ~FP16-ULP perturbation in logits, small
 but measurable. Tests assert top-1 stability and a bounded max-abs drift,
 matching the v6 plan's "soft gates" framing for Phase 4.
 """

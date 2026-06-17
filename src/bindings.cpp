@@ -173,14 +173,14 @@ PYBIND11_MODULE(_llmengine, m) {
         .def_property_readonly("max_pos",
             [](const Engine& e) { return e.max_pos(); },
             "Largest valid (pos + 1) accepted by forward_step / generate. "
-            "Pure function of the config — useful for clients that want to "
+            "Pure function of the config, useful for clients that want to "
             "validate (prompt_len + max_new_tokens) before submitting.")
         .def("weight_names",
             [](const Engine& e) { return e.weights().keys(); })
         .def("has_weight",
             [](const Engine& e, const std::string& n) { return e.weights().contains(n); })
 #if defined(LLMENGINE_DEBUG_BINDINGS)
-        // Test/debug only — see plan §2.1. Defaults ON in the correctness
+        // Test/debug only, see plan §2.1. Defaults ON in the correctness
         // build (needed by Phase 0 tied-alias tests), OFF in perf. Override
         // at configure with -DLLMENGINE_DEBUG_BINDINGS=ON/OFF.
         .def("_debug_weight_ptr",
@@ -305,7 +305,7 @@ PYBIND11_MODULE(_llmengine, m) {
                 sched.run_until_done();
             })
         // results() returns enqueue-order (sorted by seq_id) at the C++
-        // level — no extra sort needed in the binding.
+        // level, no extra sort needed in the binding.
         .def_property_readonly("results", &StaticBatchScheduler::results)
         .def("clear_results", &StaticBatchScheduler::clear_results);
 

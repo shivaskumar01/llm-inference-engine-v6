@@ -452,7 +452,7 @@ std::vector<float> Engine::forward_logits_paged(
 
     std::vector<float> logits(static_cast<std::size_t>(T) * V);
     for (int t = 0; t < T; ++t) {
-        // forward_mu_ already held by this function — use the _locked
+        // forward_mu_ already held by this function, use the _locked
         // variant to avoid double-lock on std::mutex.
         bool ok = forward_step_paged_locked(
             ids[t], t, kv, &logits[static_cast<std::size_t>(t) * V]);
@@ -762,7 +762,7 @@ Engine::generate(const std::vector<std::int32_t>& prompt_ids, int max_new_tokens
         int next = argmax(logits.data(), V);
         if (cfg_.eos_token_ids.count(next)) { finish = "stop"; break; }
         out.push_back(static_cast<std::int32_t>(next));
-        // Skip the forward pass after the final token — its logits would
+        // Skip the forward pass after the final token, its logits would
         // never be sampled. Mirrors generate_streaming + the schedulers'
         // "advance only if we'll decode again" guard, so generate() no
         // longer does one wasted forward_step per call.
@@ -780,7 +780,7 @@ void Engine::generate_streaming(
     std::function<void(const std::string&)> on_done,
     CancelToken& cancel) {
     // unique_lock instead of lock_guard so we can release around on_token /
-    // on_done calls — a user callback that calls back into engine.generate /
+    // on_done calls, a user callback that calls back into engine.generate /
     // forward_logits otherwise deadlocks on std::mutex. The forward state
     // (scratch buffers + the local KV cache) is consistent between forward
     // steps, so it's safe to drop the mutex while invoking the callback.
@@ -792,7 +792,7 @@ void Engine::generate_streaming(
     };
 
     // Wrap the whole body so any std::exception (overflow check below, kv
-    // allocation, kernel failure, etc.) still produces an on_done — without
+    // allocation, kernel failure, etc.) still produces an on_done, without
     // this, the SSE bridge sits on q.get() forever waiting for a DONE that
     // never arrives.
     try {
@@ -820,7 +820,7 @@ void Engine::generate_streaming(
 
         std::vector<float> logits(V);
 
-        // Prefill — capture logits on the last prompt token. Cancellation is
+        // Prefill, capture logits on the last prompt token. Cancellation is
         // checked between forward steps so a long prompt isn't immune to it.
         for (int i = 0; i < prompt_len; ++i) {
             if (cancel.is_cancelled()) { finish("cancelled"); return; }

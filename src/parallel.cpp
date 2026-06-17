@@ -118,7 +118,7 @@ int pool_size() {
 #if defined(__APPLE__)
         // Default to the performance-core count, NOT hardware_concurrency().
         // On Apple Silicon the efficiency cores are much slower, and in an
-        // even-split fork-join the caller blocks on the slowest chunk — so
+        // even-split fork-join the caller blocks on the slowest chunk, so
         // handing chunks to E-cores tanks throughput (measured: using all 12
         // cores is *slower* than a single thread for the M=1 per-seq path).
         // perflevel0 is the highest-performance core class (the P-cores).

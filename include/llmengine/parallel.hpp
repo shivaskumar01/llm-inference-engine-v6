@@ -6,7 +6,7 @@
 // engine serializes every forward pass through `forward_mu_`, so only one
 // caller ever drives the pool at a time; workers are pure C++ (they never
 // touch Python / the GIL). Parallelizing over output channels keeps results
-// bit-for-bit identical to the serial path — each out[m, n] is still computed
+// bit-for-bit identical to the serial path, each out[m, n] is still computed
 // by exactly one thread as the same serial dot over K, so no reduction order
 // changes and the numerical-equality gates hold unchanged.
 
@@ -18,7 +18,7 @@ namespace llmengine {
 
 // Number of participating threads (caller + workers) for parallel_for. Read
 // once from LLMENGINE_NUM_THREADS, else std::thread::hardware_concurrency(),
-// clamped to [1, 64]. Cheap and spawns nothing — only pool_parallel_for
+// clamped to [1, 64]. Cheap and spawns nothing, only pool_parallel_for
 // materializes the worker threads.
 int pool_size();
 
@@ -29,7 +29,7 @@ void pool_parallel_for(int N, const std::function<void(int, int)>& fn);
 
 // Work (e.g. N*K MACs) below which fork-join overhead isn't worth it. Tuned so
 // real-1B matmuls (N*K in the millions) parallelize while tiny-fixture matmuls
-// (tens of thousands) run serially — the tiny test suite then sees no pool and
+// (tens of thousands) run serially, the tiny test suite then sees no pool and
 // no behavior change.
 inline constexpr std::int64_t kParallelWorkThreshold = 1 << 18;
 

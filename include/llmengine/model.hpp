@@ -13,7 +13,7 @@ namespace llmengine {
 // Per-layer pointer bundles. The "F32" struct (LayerWeightsRef) is the
 // canonical reference path: norms + linear weights all FP32. The "F16"
 // struct (LayerWeightsRefFp16) shares the FP32 norms but stores linear
-// weights as __fp16 — half the memory bandwidth at decode time.
+// weights as __fp16, half the memory bandwidth at decode time.
 struct LayerWeightsRef {
     const float* attn_norm = nullptr;       // [hidden]
     const float* ffn_norm  = nullptr;       // [hidden]
@@ -27,7 +27,7 @@ struct LayerWeightsRef {
 };
 
 struct LayerWeightsRefFp16 {
-    const float*  attn_norm = nullptr;      // [hidden] — still FP32 (tiny)
+    const float*  attn_norm = nullptr;      // [hidden], still FP32 (tiny)
     const float*  ffn_norm  = nullptr;
     const __fp16* W_q       = nullptr;
     const __fp16* W_k       = nullptr;
@@ -102,7 +102,7 @@ private:
 
     // F32 storage. When tie_word_embeddings is true, lm_head_f32_storage_
     // stays empty and lm_head_f32_ptr_ aliases embed_tokens_.data() (saves
-    // ~vocab*hidden*4 bytes — ~1 GB on real 1B in FP32 mode). Otherwise
+    // ~vocab*hidden*4 bytes, ~1 GB on real 1B in FP32 mode). Otherwise
     // lm_head_f32_storage_ holds the materialized matrix and the pointer
     // points into it. The accessor returns the pointer so callers don't
     // need to know which case applies.

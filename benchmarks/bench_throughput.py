@@ -48,7 +48,7 @@ def _per_seq_latency_ms(results) -> dict:
     """Returns p50/p99 inter-token latency over the workload's generated tokens.
     Per-token timing isn't exposed by the scheduler, so we approximate as
     elapsed_s / total_generated. Real p99 wiring is a follow-up."""
-    return {}  # placeholder — see results.md note about scheduler-side timing
+    return {}  # placeholder, see results.md note about scheduler-side timing
 
 
 def bench_workload(engine, cfg, prompts: list[list[int]], max_new: int,

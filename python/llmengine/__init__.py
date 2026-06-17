@@ -1,4 +1,4 @@
-"""llmengine — from-scratch LLM inference engine.
+"""llmengine, from-scratch LLM inference engine.
 
 The C++ backend is exposed as the ``_llmengine`` extension module that lives
 next to this file (built by CMake into python/llmengine/).

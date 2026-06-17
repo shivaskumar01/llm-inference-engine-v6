@@ -108,7 +108,7 @@ ModelConfig load_config(const std::string& model_dir) {
     absorb_eos(j);
 
     // HF splits Llama 3.x's full EOS set ({eot, eom, eot_id}) into
-    // generation_config.json — config.json keeps only one. Merge both so
+    // generation_config.json, config.json keeps only one. Merge both so
     // multi-EOS termination works for Instruct models out of the box.
     std::ifstream gen_f(model_dir + "/generation_config.json");
     if (gen_f) {
@@ -249,7 +249,7 @@ void WeightMap::apply_tied_lm_head_alias() {
     }
     auto lm_it = tensors_.find("lm_head.weight");
     if (lm_it == tensors_.end()) {
-        // Tied checkpoint that omits lm_head.weight — alias it.
+        // Tied checkpoint that omits lm_head.weight, alias it.
         tensors_.emplace("lm_head.weight", embed_it->second);
         return;
     }

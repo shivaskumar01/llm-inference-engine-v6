@@ -19,7 +19,7 @@ def tiny_engine(tmp_path_factory):
 
 def test_paged_eq_contiguous_tiny(tiny_engine) -> None:
     """Forward through PagedKVCache must produce bit-identical logits to the
-    ContiguousKVCache path — the math is the same, only the K/V storage
+    ContiguousKVCache path, the math is the same, only the K/V storage
     differs."""
     engine, cfg = tiny_engine
 
@@ -39,7 +39,7 @@ def test_paged_eq_contiguous_tiny(tiny_engine) -> None:
         paged  = engine.forward_logits_paged(ids, mgr)
         np.testing.assert_array_equal(contig, paged)
 
-    # release_all has happened inside forward_logits_paged — pool drains.
+    # release_all has happened inside forward_logits_paged, pool drains.
     assert mgr.free_blocks == 8
 
 

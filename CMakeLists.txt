@@ -101,7 +101,7 @@ if(LLMENGINE_MODE STREQUAL "CORRECTNESS")
   # _llmengine.so loads as part of a real `llmengine` package. Use
   # add_custom_command (not configure_file) so edits to __init__.py /
   # server.py propagate on every `cmake --build` rather than requiring a
-  # re-configure — previously stale copies caused server tests to fail in
+  # re-configure, previously stale copies caused server tests to fail in
   # correctness while passing in perf.
   set(LLMENGINE_PY_FILES __init__.py server.py)
   set(LLMENGINE_PY_OUTPUTS "")

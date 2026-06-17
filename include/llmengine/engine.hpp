@@ -35,10 +35,10 @@ private:
 // Phase 3: ContiguousKVCache + generate.
 // Phase 4.2: optional FP16 linear-weight storage path (`dtype="fp16"`).
 //
-// Thread safety: every public forward entry point —
+// Thread safety: every public forward entry point,
 //   forward_logits, generate, generate_streaming, forward_logits_paged,
 //   forward_step_paged
-// — serializes through `forward_mu_`. Concurrent callers (FastAPI workers,
+//, serializes through `forward_mu_`. Concurrent callers (FastAPI workers,
 // schedulers driven from other threads, direct Python clients) see correct
 // per-call output; the mutable scratch buffers are exclusive for the
 // duration of each call. generate_streaming uses a unique_lock and
@@ -58,7 +58,7 @@ public:
     ModelWeightsRef::LinearStorage linear_storage() const { return storage_; }
 
     // Largest valid (pos + 1) accepted by forward_step / forward_step_paged.
-    // Pure function of the config — safe to call before the model has been
+    // Pure function of the config, safe to call before the model has been
     // materialized, and what the schedulers use for their enqueue-time check.
     int max_pos() const { return compute_max_pos(cfg_); }
 
@@ -106,7 +106,7 @@ public:
 
     // Single-token paged forward. Public so the Phase 7 scheduler can
     // drive its own loop. Returns false (and leaves logits_out unset) on
-    // KV-pool exhaustion — the scheduler should terminate that seq with
+    // KV-pool exhaustion, the scheduler should terminate that seq with
     // finish_reason="capacity".
     //
     // Thread safe: takes forward_mu_ for the call, so it can safely be
@@ -117,13 +117,13 @@ public:
                                           PagedKVCache& kv,
                                           float* logits_out);
 
-    // Batched single decode step over B sequences — the continuous-batching
+    // Batched single decode step over B sequences, the continuous-batching
     // hot path. tokens[i]/positions[i] advance kvs[i] by one token; logits for
     // seq i land in row i of logits_out (row-major [B, vocab_size]). alive[i]
     // is set to 0 iff seq i's KV pool was exhausted this step (its logits row
     // is then undefined; the caller terminates that seq with "capacity"). The
-    // projection matmuls run once at M=B — the weight-stationary kernels reuse
-    // each weight row across the batch — while attention stays per-seq since
+    // projection matmuls run once at M=B, the weight-stationary kernels reuse
+    // each weight row across the batch, while attention stays per-seq since
     // each sequence has its own paged KV history and RoPE position.
     // Thread-safe: serializes on forward_mu_.
     void forward_decode_batch(const std::vector<std::int32_t>& tokens,
@@ -152,7 +152,7 @@ private:
     ModelWeightsRef::LinearStorage storage_;
     bool            model_built_ = false;
 
-    // Forward-pass scratch. Serialized by `forward_mu_` — any public API
+    // Forward-pass scratch. Serialized by `forward_mu_`, any public API
     // that mutates these holds the mutex for the full call. See the
     // class-level thread-safety note above.
     mutable std::mutex forward_mu_;

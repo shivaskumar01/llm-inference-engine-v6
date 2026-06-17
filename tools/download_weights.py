@@ -32,7 +32,7 @@ def main() -> int:
     print(f"Downloading {repo} to {out}/ ...")
     try:
         snapshot_download(repo_id=repo, local_dir=str(out))
-    except Exception as e:  # noqa: BLE001 — surface to user with hint
+    except Exception as e:  # noqa: BLE001, surface to user with hint
         print(f"\nDownload failed: {e}", file=sys.stderr)
         if args.mirror == "meta":
             print("\nThe meta-llama repo is gated. Either run "

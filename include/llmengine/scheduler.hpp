@@ -36,7 +36,7 @@ struct Sequence {
           kv(std::make_unique<PagedKVCache>(mgr)) {}
 };
 
-// Snapshot of a Sequence after it FINISHED — token_ids include the prompt
+// Snapshot of a Sequence after it FINISHED, token_ids include the prompt
 // plus everything generated up to the terminal transition. Returned in
 // enqueue order from the scheduler.
 struct SequenceResult {
@@ -115,7 +115,7 @@ public:
         budget_ = v;
     }
 
-    // Same contract as StaticBatchScheduler::results() — returns a copy in
+    // Same contract as StaticBatchScheduler::results(), returns a copy in
     // enqueue order (sorted by seq_id). Internal results_ is completion
     // order so finalize_finished can append cheaply.
     std::vector<SequenceResult> results() const {

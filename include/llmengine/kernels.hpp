@@ -45,7 +45,7 @@ void matmul_f32(const float* a,
 #if defined(__ARM_NEON)
 // NEON-accelerated drop-in for matmul_f32 with the same signature/contract.
 // Inner-K dot product is 4-way unrolled (16 lanes/iter) with FP32 FMA;
-// outer (m, n) loops stay scalar — enough to hit ~4-5x the scalar version
+// outer (m, n) loops stay scalar, enough to hit ~4-5x the scalar version
 // on Apple Silicon for the matmul shapes used in Llama 3.2 1B forward.
 void matmul_f32_neon(const float* a,
                      const float* w,
@@ -56,7 +56,7 @@ void matmul_f32_neon(const float* a,
 #endif
 
 // W16A32 matmul: FP16 weights, FP32 activations, FP32 output. Halves the
-// bytes/element read from the weight matrix — the main bandwidth win for
+// bytes/element read from the weight matrix, the main bandwidth win for
 // decode-time matmuls on memory-bound Apple Silicon.
 //
 // W layout matches matmul_f32: row-major [N=out, K=in]. Stored as __fp16.
@@ -85,7 +85,7 @@ void matmul_f16w_f32a_neon(const float*  a,
 // out[m, n] = scales[n] * sum_k (a[m, k] * float(w[n, k]))
 //
 // The NEON path widens int8 → int16 → int32 → float inline (no sdot/i8mm
-// yet — that's W8A8 territory and a v2 stretch).
+// yet, that's W8A8 territory and a v2 stretch).
 void matmul_int8w_f32a(const float*       a,
                        const std::int8_t* w,
                        const __fp16*      scales,
@@ -140,10 +140,10 @@ void apply_rope_inplace(float*       q,
                         int          head_dim);
 
 // Multi-head attention with grouped-query attention (GQA).
-// q:        [num_q_heads, head_dim]    — current query (single token)
-// K_hist:   [seq_len, num_kv_heads, head_dim]   — keys for positions 0..seq_len-1
-// V_hist:   [seq_len, num_kv_heads, head_dim]   — values
-// out:      [num_q_heads, head_dim]    — concatenated attention output
+// q:        [num_q_heads, head_dim], current query (single token)
+// K_hist:   [seq_len, num_kv_heads, head_dim], keys for positions 0..seq_len-1
+// V_hist:   [seq_len, num_kv_heads, head_dim], values
+// out:      [num_q_heads, head_dim], concatenated attention output
 //
 // group_size = num_q_heads / num_kv_heads. Causal handled by seq_len bound.
 void attention_f32(const float* q,

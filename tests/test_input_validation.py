@@ -131,7 +131,7 @@ def test_engine_generate_input_errors_before_model_load(tmp_path) -> None:
     # Negative max_new_tokens: same.
     with pytest.raises(ValueError, match="max_new_tokens"):
         e.generate([1], -1)
-    # Out-of-range token id: same — token validation also happens upfront.
+    # Out-of-range token id: same, token validation also happens upfront.
     with pytest.raises(ValueError, match="out of range"):
         e.generate([999], 1)
 
@@ -151,7 +151,7 @@ def test_http_streaming_overflow_does_not_hang() -> None:
     through to the worker, which raised and left the SSE bridge waiting
     forever for a DONE that never came. After the v6 pre-stream validation
     landed, the same request is caught synchronously and the response is
-    a structured 422 — the test still asserts 'doesn't hang' (the regression
+    a structured 422, the test still asserts 'doesn't hang' (the regression
     we care about), plus the better-shaped 422 status it now returns."""
     import time
     from fastapi.testclient import TestClient

@@ -60,7 +60,7 @@ def test_full_forward_logits_match(tiny_engine_and_hf) -> None:
 
 
 def test_per_layer_hidden_states(tiny_engine_and_hf) -> None:
-    """Single-token forward, but compare argmax stability across positions —
+    """Single-token forward, but compare argmax stability across positions,
     serves as a faster gate than the full-forward check above."""
     engine, hf_model, cfg = tiny_engine_and_hf
     rng = np.random.default_rng(1)

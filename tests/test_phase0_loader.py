@@ -44,7 +44,7 @@ def _write_minimal_checkpoint(out_dir: Path, *, tied: bool) -> None:
     cfg["tie_word_embeddings"] = tied
     (out_dir / "config.json").write_text(json.dumps(cfg))
 
-    # Tiny tensor shapes for the loader test — we only check parsing/aliasing,
+    # Tiny tensor shapes for the loader test, we only check parsing/aliasing,
     # not values. Two layers' worth of names.
     tensors = {
         "model.embed_tokens.weight":          np.zeros((8, 4),  dtype=np.float16),
@@ -70,7 +70,7 @@ def test_config_fields_parse(tmp_path: Path) -> None:
     assert e.cfg.vocab_size == 128256
     assert e.cfg.tie_word_embeddings is True
 
-    # Multi-EOS — Phase 0 deliverable: 3-element set.
+    # Multi-EOS, Phase 0 deliverable: 3-element set.
     assert e.cfg.eos_token_ids == {128001, 128008, 128009}
 
     # RoPE scaling parsed.
@@ -138,7 +138,7 @@ def test_transposed_linear_weight_rejected(tmp_path: Path) -> None:
     # Build a tiny model where the loader uses these dims:
     #   q_proj: [n_q_dim=8, hidden=4]   k_proj/v_proj: [n_kv_dim=4, hidden=4]
     # We'll save a k_proj transposed as [4, 4] swapped → [hidden=4, n_kv=4]
-    # Wait: 4x4 == 4x4 — so use n_kv_dim=2 to make it asymmetric:
+    # Wait: 4x4 == 4x4, so use n_kv_dim=2 to make it asymmetric:
     #   intended k_proj shape: [n_kv_dim=2, hidden=4]
     #   evil shape:            [hidden=4, n_kv_dim=2]    (numel still 8)
     cfg = {
@@ -158,7 +158,7 @@ def test_transposed_linear_weight_rejected(tmp_path: Path) -> None:
         "model.layers.0.input_layernorm.weight":     np.ones( (4,),   dtype=np.float16),
         "model.layers.0.post_attention_layernorm.weight": np.ones((4,), dtype=np.float16),
         "model.layers.0.self_attn.q_proj.weight":    np.zeros((4, 4), dtype=np.float16),
-        # Evil: should be (n_kv_dim=2, hidden=4) but is (4, 2) — same numel.
+        # Evil: should be (n_kv_dim=2, hidden=4) but is (4, 2), same numel.
         "model.layers.0.self_attn.k_proj.weight":    np.zeros((4, 2), dtype=np.float16),
         "model.layers.0.self_attn.v_proj.weight":    np.zeros((2, 4), dtype=np.float16),
         "model.layers.0.self_attn.o_proj.weight":    np.zeros((4, 4), dtype=np.float16),
@@ -177,7 +177,7 @@ def test_transposed_linear_weight_rejected(tmp_path: Path) -> None:
 
 def test_safetensors_byte_count_mismatch_rejected(tmp_path: Path) -> None:
     """A tensor whose data_offsets cover fewer bytes than shape*dtype must be
-    rejected — before the fix the loader accepted shape=[8,4] dtype=F16
+    rejected, before the fix the loader accepted shape=[8,4] dtype=F16
     (64 bytes expected) with only 2 bytes of data."""
     import json
     import struct
@@ -233,7 +233,7 @@ def test_safetensors_negative_shape_dim_rejected(tmp_path: Path) -> None:
 def test_safetensors_offset_past_data_section_rejected(tmp_path: Path) -> None:
     """data_offsets are relative to the data section (file size minus 8
     minus header_len), not the whole file. A malformed file pointing past
-    the data section but still inside the file must be rejected — the
+    the data section but still inside the file must be rejected, the
     previous bound was too permissive."""
     import json
     import struct

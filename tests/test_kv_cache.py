@@ -11,7 +11,7 @@ Three groups of tests:
      contain whatever token the model emits first (so we can deterministically
      trigger "stop" without needing a trained model).
   4. (optional) Real-1B 3-token greedy smoke decode that doesn't crash and
-     produces coherent text — skipped if weights are not downloaded.
+     produces coherent text, skipped if weights are not downloaded.
 """
 from __future__ import annotations
 

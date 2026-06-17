@@ -112,7 +112,7 @@ const Tensor& must_get(const WeightMap& wm, const std::string& name) {
 
 // Enforce the exact tensor shape, not just the element count. cast_to_fp32 /
 // cast_to_fp16 / quantize_int8_per_row all copy `numel(shape) * dtype_bytes`
-// — a transposed weight (same numel, swapped dims) silently passes them
+//, a transposed weight (same numel, swapped dims) silently passes them
 // otherwise.
 std::string fmt_shape(const std::vector<std::int64_t>& s) {
     std::string r = "[";
@@ -175,7 +175,7 @@ void ModelWeightsRef::load(const ModelConfig& cfg,
     const std::vector<std::int64_t> shape_hidden = {
         static_cast<std::int64_t>(hidden)};
 
-    // Embeddings + final norm + RoPE — always FP32, regardless of storage mode.
+    // Embeddings + final norm + RoPE, always FP32, regardless of storage mode.
     load_into_fp32(wm, "model.embed_tokens.weight", embed_tokens_, shape_vocab_hidden);
     load_into_fp32(wm, "model.norm.weight",         final_norm_,   shape_hidden);
 
