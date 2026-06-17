@@ -66,6 +66,14 @@ Two build modes, both green on the full test suite:
 
 ---
 
+## API keys
+
+No key goes in the repo. The Llama 3.2 1B-Instruct weights are gated, so you
+authenticate with Hugging Face once: run `huggingface-cli login` and accept the license
+at https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct. After that,
+`python tools/download_weights.py` pulls the weights into `data/` (gitignored) and the
+engine runs fully offline.
+
 ## Build
 
 ```bash
